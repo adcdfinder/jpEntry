@@ -318,6 +318,14 @@ app.whenReady().then(() => {
   createUrlDialog();
 });
 
+app.on('before-quit', async () => {
+  // Flush the kiosk session's cookie store so login state survives restarts.
+  // Electron/Chromium buffers cookie writes; without this they can be lost on exit.
+  if (kioskSession) {
+    await kioskSession.cookies.flushStore().catch(() => {});
+  }
+});
+
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
