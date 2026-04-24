@@ -13,6 +13,7 @@ As you can see, the application is all generated with AI. The initial requiremen
 | **Startup URL dialog** | Popup on launch to enter the target URL (default: `http://192.168.88.250:8080`) |
 | **Kiosk mode** | Full-screen, no browser chrome, no taskbar access after URL is confirmed |
 | **Navigation popup** | `Ctrl+Alt+H` reveals operator controls |
+| **Paste dialog** | Type or paste text into a dialog; on Apply it is injected into the focused input on the page |
 | **New-window redirect** | All `target="_blank"` links and `window.open()` calls load inside the main window |
 | **iframe detection** | When a page embeds an iframe, a popup asks whether to navigate to the iframe URL in the main window |
 | **No menu bar** | File / Edit / View menu is removed from all windows |
@@ -30,8 +31,19 @@ As you can see, the application is all generated with AI. The initial requiremen
 
 - 🏠 **Go to Root Page** — reload the startup URL
 - ⬅ **Go to Last Page** — go back one step in history
+- 📋 **Paste Text** — open the paste dialog to inject text into the focused input
 - ⏻ **Close Application** — quit the app
 - **Cancel** — dismiss the popup
+
+### Paste Dialog
+
+Open via the **Paste Text** button in the navigation popup:
+
+1. Focus an input field on the web page
+2. Press `Ctrl+Alt+H` → click **Paste Text**
+3. Type or paste your text into the dialog
+4. Click **Apply** (or press `Ctrl+Enter`) — the text is injected into the previously focused input
+5. Click **Cancel** to discard
 
 ---
 
@@ -46,6 +58,7 @@ jpEntry/
 ├── icon.ico             # App icon (16 / 32 / 48 / 256 px)
 ├── url-dialog.html      # Startup URL input popup
 ├── nav-dialog.html      # Ctrl+Alt+H navigation popup
+├── paste-dialog.html    # Paste text dialog (textarea → inject into focused input)
 └── iframe-dialog.html   # iframe-detected confirmation popup
 ```
 
