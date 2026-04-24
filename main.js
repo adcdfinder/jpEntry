@@ -29,6 +29,7 @@ let mainWindow = null;
 let urlDialogWindow = null;
 let navDialogWindow = null;
 let iframeDialogWindow = null;
+let pasteDialogWindow = null;
 let rootUrl = null;          // URL entered at startup
 let pendingIframeUrl = null;
 const iframeQueue   = []; // queued iframe srcs waiting for user decision
@@ -96,7 +97,7 @@ function createNavDialog() {
 
   navDialogWindow = new BrowserWindow({
     width: 400,
-    height: 400,
+    height: 450,
     resizable: false,
     frame: false,
     alwaysOnTop: true,
@@ -108,6 +109,25 @@ function createNavDialog() {
   });
   navDialogWindow.loadFile(path.join(__dirname, 'nav-dialog.html'));
   navDialogWindow.on('closed', () => { navDialogWindow = null; });
+}
+
+function createPasteDialog() {
+  if (pasteDialogWindow) { pasteDialogWindow.focus(); return; }
+
+  pasteDialogWindow = new BrowserWindow({
+    width: 500,
+    height: 320,
+    resizable: false,
+    frame: false,
+    alwaysOnTop: true,
+    icon: ICON,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  pasteDialogWindow.loadFile(path.join(__dirname, 'paste-dialog.html'));
+  pasteDialogWindow.on('closed', () => { pasteDialogWindow = null; });
 }
 
 function createIframeDialog(iframeUrl) {
@@ -175,6 +195,12 @@ ipcMain.on('url-submitted', (_event, url) => {
 
 // Navigation popup actions
 ipcMain.on('nav-action', (_event, action) => {
+  if (action === 'paste') {
+    if (navDialogWindow) navDialogWindow.close();
+    createPasteDialog();
+    return;
+  }
+
   if (navDialogWindow) navDialogWindow.close();
 
   if (action === 'quit') {
@@ -207,6 +233,32 @@ ipcMain.on('iframe-action', (_event, action) => {
   if (action === 'navigate' && url && mainWindow) {
     mainWindow.loadURL(url);
   }
+});
+
+// Paste dialog: inject text into the focused element of the main window
+ipcMain.on('paste-apply', (_event, text) => {
+  if (pasteDialogWindow) pasteDialogWindow.close();
+  if (!mainWindow || !text) return;
+
+  mainWindow.focus();
+  mainWindow.webContents.focus();
+
+  // Small delay to let the window regain focus before sending input events
+  setTimeout(() => {
+    for (const char of text) {
+      if (char === '\r') continue; // skip \r in \r\n line endings
+      if (char === '\n') {
+        mainWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+        mainWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+      } else {
+        mainWindow.webContents.sendInputEvent({ type: 'char', keyCode: char });
+      }
+    }
+  }, 150);
+});
+
+ipcMain.on('paste-cancel', () => {
+  if (pasteDialogWindow) pasteDialogWindow.close();
 });
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────

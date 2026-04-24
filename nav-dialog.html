@@ -70,6 +70,8 @@
     #rootBtn:hover { background: #d4aaff; }
     #backBtn { background: #45475a; color: #cdd6f4; }
     #backBtn:hover { background: #585b70; }
+    #pasteBtn { background: #45475a; color: #cdd6f4; }
+    #pasteBtn:hover { background: #585b70; }
     #quitBtn { background: #3d1a22; color: #f38ba8; border: 1px solid #5a2030; }
     #quitBtn:hover { background: #4d2030; }
     #cancelBtn {
@@ -102,6 +104,9 @@
       <button id="backBtn">
         <span class="btn-icon">⬅</span>Go to Last Page
       </button>
+      <button id="pasteBtn">
+        <span class="btn-icon">📋</span>Paste Text
+      </button>
     </div>
     <hr class="divider" />
     <div class="nav-group">
@@ -115,6 +120,7 @@
     const { ipcRenderer } = require('electron');
     document.getElementById('rootBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'root'));
     document.getElementById('backBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'back'));
+    document.getElementById('pasteBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'paste'));
     document.getElementById('quitBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'quit'));
     document.getElementById('cancelBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'cancel'));
   </script>
