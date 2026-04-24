@@ -52,9 +52,9 @@ let kioskSession = null;
 function createUrlDialog() {
   urlDialogWindow = new BrowserWindow({
     width: 520,
-    height: 260,
+    height: 280,
     resizable: false,
-    frame: true,
+    frame: false,
     alwaysOnTop: true,
     icon: ICON,
     webPreferences: {
