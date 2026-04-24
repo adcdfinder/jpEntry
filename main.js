@@ -83,6 +83,28 @@ function createMainWindow(url) {
 
   mainWindow.loadURL(url);
 
+  // Inject a focus tracker so we can find the last focused input after popups steal focus
+  function injectFocusTracker() {
+    mainWindow.webContents.executeJavaScript(`
+      if (!window.__jpFocusTracking) {
+        window.__jpFocusTracking = true;
+        window.__jpLastFocused = null;
+        document.addEventListener('focusin', function(e) {
+          if (e.target && (
+            e.target.tagName === 'INPUT' ||
+            e.target.tagName === 'TEXTAREA' ||
+            e.target.isContentEditable
+          )) {
+            window.__jpLastFocused = e.target;
+          }
+        }, true);
+      }
+    `).catch(() => {});
+  }
+  mainWindow.webContents.on('did-finish-load', injectFocusTracker);
+  mainWindow.webContents.on('did-navigate', injectFocusTracker);
+  mainWindow.webContents.on('did-navigate-in-page', injectFocusTracker);
+
   // Redirect all new-window requests (target="_blank", window.open) into the main window
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     mainWindow.loadURL(targetUrl);
@@ -235,26 +257,49 @@ ipcMain.on('iframe-action', (_event, action) => {
   }
 });
 
-// Paste dialog: inject text into the focused element of the main window
+// Paste dialog: inject text into the focused element using chunked sendInputEvent.
+// Chunks of CHUNK_SIZE chars are sent per animation frame to avoid UI stalls on large pastes.
+// \n → Return key, \t → Tab key, other chars via type:'char'.
 ipcMain.on('paste-apply', (_event, text) => {
   if (pasteDialogWindow) pasteDialogWindow.close();
   if (!mainWindow || !text) return;
 
+  const CHUNK_SIZE = 20;
+  const CHUNK_DELAY = 16; // ms between chunks (~1 frame)
+
   mainWindow.focus();
   mainWindow.webContents.focus();
 
-  // Small delay to let the window regain focus before sending input events
-  setTimeout(() => {
-    for (const char of text) {
-      if (char === '\r') continue; // skip \r in \r\n line endings
-      if (char === '\n') {
-        mainWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
-        mainWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
-      } else {
-        mainWindow.webContents.sendInputEvent({ type: 'char', keyCode: char });
+  // Re-focus the element the user was in before the popup opened
+  mainWindow.webContents.executeJavaScript(`
+    (function() {
+      var el = window.__jpLastFocused || document.activeElement;
+      if (el && el !== document.body) el.focus();
+    })();
+  `).finally(() => {
+    const chars = Array.from(text); // handles multi-byte chars correctly
+    let i = 0;
+
+    const sendNextChunk = () => {
+      const end = Math.min(i + CHUNK_SIZE, chars.length);
+      while (i < end) {
+        const char = chars[i++];
+        if (char === '\r') continue;
+        if (char === '\n') {
+          mainWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+          mainWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+        } else if (char === '\t') {
+          // Send as char event to insert literal tab, not as a Tab key (which triggers indentation/navigation)
+          mainWindow.webContents.sendInputEvent({ type: 'char', keyCode: '\t' });
+        } else {
+          mainWindow.webContents.sendInputEvent({ type: 'char', keyCode: char });
+        }
       }
-    }
-  }, 150);
+      if (i < chars.length) setTimeout(sendNextChunk, CHUNK_DELAY);
+    };
+
+    setTimeout(sendNextChunk, 50); // brief pause after focus before typing
+  });
 });
 
 ipcMain.on('paste-cancel', () => {
