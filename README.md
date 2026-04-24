@@ -2,6 +2,8 @@
 
 A Windows kiosk browser application built with Electron. Designed to lock the screen to a single web URL in fullscreen mode, with operator controls hidden behind keyboard shortcuts.
 
+As you can see, the application is all generated with AI. The initial requirements can be checked in jpEntry.md.
+
 ---
 
 ## Features
@@ -10,9 +12,7 @@ A Windows kiosk browser application built with Electron. Designed to lock the sc
 |---|---|
 | **Startup URL dialog** | Popup on launch to enter the target URL (default: `http://192.168.88.250:8080`) |
 | **Kiosk mode** | Full-screen, no browser chrome, no taskbar access after URL is confirmed |
-| **Session persistence** | Cookies and login state saved to disk — survives app restarts |
 | **Navigation popup** | `Ctrl+Alt+H` reveals operator controls |
-| **Quit shortcut** | `Ctrl+Alt+Shift+Q` exits immediately |
 | **New-window redirect** | All `target="_blank"` links and `window.open()` calls load inside the main window |
 | **iframe detection** | When a page embeds an iframe, a popup asks whether to navigate to the iframe URL in the main window |
 | **No menu bar** | File / Edit / View menu is removed from all windows |
@@ -25,7 +25,6 @@ A Windows kiosk browser application built with Electron. Designed to lock the sc
 | Shortcut | Action |
 |---|---|
 | `Ctrl+Alt+H` | Open navigation popup |
-| `Ctrl+Alt+Shift+Q` | Quit application immediately |
 
 ### Navigation Popup Options
 
