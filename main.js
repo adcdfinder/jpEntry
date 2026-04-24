@@ -1,0 +1,226 @@
+'use strict';
+
+const {
+  app,
+  BrowserWindow,
+  globalShortcut,
+  ipcMain,
+  session,
+  Menu,
+} = require('electron');
+const path = require('path');
+
+// Required for Windows notifications / taskbar grouping
+app.setAppUserModelId('com.opengeolabs.jpentry');
+
+// ── GPU / rendering optimisation (Windows) ───────────────────────────────────
+// Must be set before app.whenReady()
+app.commandLine.appendSwitch('enable-gpu-rasterization');       // GPU-accelerated 2D canvas & CSS
+app.commandLine.appendSwitch('enable-oop-rasterization');       // out-of-process rasterisation thread
+app.commandLine.appendSwitch('enable-accelerated-video-decode');// hardware video decode (H.264, VP9 …)
+app.commandLine.appendSwitch('ignore-gpu-blocklist');           // bypass driver-based GPU blocklist
+app.commandLine.appendSwitch('enable-features',
+  'VaapiVideoDecoder,VaapiVideoEncoder,CanvasOopRasterization');
+
+const ICON = path.join(__dirname, 'icon.ico');
+
+// ── State ────────────────────────────────────────────────────────────────────
+let mainWindow = null;
+let urlDialogWindow = null;
+let navDialogWindow = null;
+let iframeDialogWindow = null;
+let rootUrl = null;          // URL entered at startup
+let pendingIframeUrl = null;
+const iframeQueue   = []; // queued iframe srcs waiting for user decision
+
+// ── Session setup ─────────────────────────────────────────────────────────────
+// Called once, before any window is created
+function setupSession() {
+  const ses = session.fromPartition('persist:kiosk');
+
+  // Allow all cookies (including HTTP, local IPs, non-standard ports)
+  ses.webRequest.onHeadersReceived((details, callback) => {
+    callback({ responseHeaders: details.responseHeaders });
+  });
+
+  return ses;
+}
+
+let kioskSession = null;
+
+function createUrlDialog() {
+  urlDialogWindow = new BrowserWindow({
+    width: 520,
+    height: 260,
+    resizable: false,
+    frame: true,
+    alwaysOnTop: true,
+    icon: ICON,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  urlDialogWindow.loadFile(path.join(__dirname, 'url-dialog.html'));
+  urlDialogWindow.on('closed', () => { urlDialogWindow = null; });
+}
+
+function createMainWindow(url) {
+  rootUrl = url;
+
+  mainWindow = new BrowserWindow({
+    fullscreen: true,
+    kiosk: true,
+    icon: ICON,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
+      partition: 'persist:kiosk',   // use named partition directly
+    },
+  });
+
+  mainWindow.loadURL(url);
+
+  // Redirect all new-window requests (target="_blank", window.open) into the main window
+  mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    mainWindow.loadURL(targetUrl);
+    return { action: 'deny' }; // block the new window
+  });
+
+  mainWindow.on('closed', () => { mainWindow = null; });
+}
+
+function createNavDialog() {
+  if (navDialogWindow) { navDialogWindow.focus(); return; }
+
+  navDialogWindow = new BrowserWindow({
+    width: 400,
+    height: 400,
+    resizable: false,
+    frame: false,
+    alwaysOnTop: true,
+    icon: ICON,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  navDialogWindow.loadFile(path.join(__dirname, 'nav-dialog.html'));
+  navDialogWindow.on('closed', () => { navDialogWindow = null; });
+}
+
+function createIframeDialog(iframeUrl) {
+  if (iframeDialogWindow) {
+    // Dialog already open — queue for later
+    if (!iframeQueue.includes(iframeUrl) && iframeUrl !== pendingIframeUrl) {
+      iframeQueue.push(iframeUrl);
+    }
+    iframeDialogWindow.focus();
+    return;
+  }
+
+  pendingIframeUrl = iframeUrl;
+
+  iframeDialogWindow = new BrowserWindow({
+    width: 460,
+    height: 280,
+    resizable: false,
+    frame: false,
+    alwaysOnTop: true,
+    icon: ICON,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  iframeDialogWindow.loadFile(
+    path.join(__dirname, 'iframe-dialog.html')
+  );
+  iframeDialogWindow.webContents.on('did-finish-load', () => {
+    iframeDialogWindow.webContents.send('iframe-url', iframeUrl);
+  });
+  iframeDialogWindow.on('closed', () => {
+    iframeDialogWindow = null;
+    pendingIframeUrl   = null;
+    // Show next queued iframe if any
+    if (iframeQueue.length > 0) {
+      createIframeDialog(iframeQueue.shift());
+    }
+  });
+}
+
+// ── Global shortcuts ─────────────────────────────────────────────────────────
+function registerShortcuts() {
+  // Show nav popup  (Ctrl+Alt+H)
+  globalShortcut.register('Ctrl+Alt+H', () => {
+    if (mainWindow) createNavDialog();
+  });
+
+  // Quit immediately  (Ctrl+Alt+Shift+Q)
+  globalShortcut.register('Ctrl+Alt+Shift+Q', () => {
+    app.quit();
+  });
+}
+
+// ── IPC handlers ─────────────────────────────────────────────────────────────
+
+// User submitted URL in startup dialog
+ipcMain.on('url-submitted', (_event, url) => {
+  if (urlDialogWindow) {
+    urlDialogWindow.close();
+  }
+  createMainWindow(url);
+});
+
+// Navigation popup actions
+ipcMain.on('nav-action', (_event, action) => {
+  if (navDialogWindow) navDialogWindow.close();
+
+  if (action === 'quit') {
+    app.quit();
+    return;
+  }
+
+  if (!mainWindow) return;
+
+  if (action === 'root' && rootUrl) {
+    mainWindow.loadURL(rootUrl);
+  } else if (action === 'back') {
+    if (mainWindow.webContents.canGoBack()) {
+      mainWindow.webContents.goBack();
+    }
+  }
+  // 'cancel' — do nothing
+});
+
+// iframe detected in page
+ipcMain.on('iframe-detected', (_event, iframeUrl) => {
+  createIframeDialog(iframeUrl);
+});
+
+// User decision on iframe redirect
+ipcMain.on('iframe-action', (_event, action) => {
+  const url = pendingIframeUrl;
+  if (iframeDialogWindow) iframeDialogWindow.close();
+
+  if (action === 'navigate' && url && mainWindow) {
+    mainWindow.loadURL(url);
+  }
+});
+
+// ── App lifecycle ─────────────────────────────────────────────────────────────
+app.whenReady().then(() => {
+  kioskSession = setupSession();
+  Menu.setApplicationMenu(null); // remove File/Edit/View menu bar from all windows
+  registerShortcuts();
+  createUrlDialog();
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+});
+
+app.on('window-all-closed', () => {
+  app.quit();
+});

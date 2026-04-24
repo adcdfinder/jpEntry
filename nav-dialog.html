@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Navigation</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+      user-select: none;
+    }
+    .card {
+      background: #313244;
+      border-radius: 16px;
+      padding: 32px 28px 24px;
+      width: 340px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    }
+    .title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+    .title-icon {
+      font-size: 1.4rem;
+      line-height: 1;
+    }
+    .title-text {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #cba6f7;
+      letter-spacing: 0.02em;
+    }
+    .nav-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .divider {
+      border: none;
+      border-top: 1px solid #45475a;
+      margin: 12px 0;
+    }
+    button {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      padding: 13px 16px;
+      border-radius: 10px;
+      border: none;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+    button:active { transform: scale(0.98); }
+    .btn-icon { font-size: 1.1rem; width: 22px; text-align: center; flex-shrink: 0; }
+    #rootBtn { background: #cba6f7; color: #1e1e2e; }
+    #rootBtn:hover { background: #d4aaff; }
+    #backBtn { background: #45475a; color: #cdd6f4; }
+    #backBtn:hover { background: #585b70; }
+    #quitBtn { background: #3d1a22; color: #f38ba8; border: 1px solid #5a2030; }
+    #quitBtn:hover { background: #4d2030; }
+    #cancelBtn {
+      display: block;
+      width: 100%;
+      padding: 11px;
+      background: transparent;
+      color: #6c7086;
+      border: 1px solid #45475a;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      text-align: center;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    #cancelBtn:hover { color: #cdd6f4; border-color: #6c7086; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="title">
+      <span class="title-icon">🖥</span>
+      <span class="title-text">Kiosk Navigation</span>
+    </div>
+    <div class="nav-group">
+      <button id="rootBtn">
+        <span class="btn-icon">🏠</span>Go to Root Page
+      </button>
+      <button id="backBtn">
+        <span class="btn-icon">⬅</span>Go to Last Page
+      </button>
+    </div>
+    <hr class="divider" />
+    <div class="nav-group">
+      <button id="quitBtn">
+        <span class="btn-icon">⏻</span>Close Application
+      </button>
+    </div>
+    <button id="cancelBtn">Cancel</button>
+  </div>
+  <script>
+    const { ipcRenderer } = require('electron');
+    document.getElementById('rootBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'root'));
+    document.getElementById('backBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'back'));
+    document.getElementById('quitBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'quit'));
+    document.getElementById('cancelBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'cancel'));
+  </script>
+</body>
+</html>

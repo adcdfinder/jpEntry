@@ -1,0 +1,56 @@
+{
+  "name": "jp-entry",
+  "version": "1.0.0",
+  "description": "Electron Kiosk Application",
+  "author": "OpenGeoLab",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId": "com.opengeolabs.jpentry",
+    "productName": "JP Entry",
+    "icon": "icon.ico",
+    "files": [
+      "main.js",
+      "preload.js",
+      "*.html",
+      "icon.ico"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "icon.ico",
+      "requestedExecutionLevel": "requireAdministrator",
+      "signingHashAlgorithms": null,
+      "sign": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "JP Entry"
+    },
+    "portable": {
+      "artifactName": "JPEntry-portable.exe"
+    }
+  }
+}

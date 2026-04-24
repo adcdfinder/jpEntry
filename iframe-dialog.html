@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Iframe Detected</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      padding: 24px;
+    }
+    .card {
+      background: #313244;
+      border-radius: 12px;
+      padding: 28px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 12px; color: #fab387; }
+    .url {
+      background: #1e1e2e;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 0.8rem;
+      color: #a6e3a1;
+      word-break: break-all;
+      margin-bottom: 20px;
+    }
+    p { font-size: 0.9rem; color: #bac2de; margin-bottom: 20px; }
+    .buttons { display: flex; gap: 10px; }
+    button {
+      flex: 1;
+      padding: 10px;
+      border-radius: 8px;
+      border: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #goBtn { background: #a6e3a1; color: #1e1e2e; }
+    #goBtn:hover { background: #b4befe; }
+    #stayBtn { background: #45475a; color: #cdd6f4; }
+    #stayBtn:hover { background: #585b70; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>📦 Embedded Frame Detected</h2>
+    <div class="url" id="iframeUrl">—</div>
+    <p>Navigate to this URL in the main window?</p>
+    <div class="buttons">
+      <button id="goBtn">✅ Navigate</button>
+      <button id="stayBtn">✖ Stay Here</button>
+    </div>
+  </div>
+  <script>
+    const { ipcRenderer } = require('electron');
+    ipcRenderer.on('iframe-url', (_, url) => {
+      document.getElementById('iframeUrl').textContent = url;
+    });
+    document.getElementById('goBtn').addEventListener('click', () => ipcRenderer.send('iframe-action', 'navigate'));
+    document.getElementById('stayBtn').addEventListener('click', () => ipcRenderer.send('iframe-action', 'stay'));
+  </script>
+</body>
+</html>

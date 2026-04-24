@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Enter URL</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      padding: 24px;
+    }
+    .card {
+      background: #313244;
+      border-radius: 12px;
+      padding: 32px;
+      width: 100%;
+      max-width: 480px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    h2 {
+      font-size: 1.2rem;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: #cba6f7;
+    }
+    input {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid #45475a;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      font-size: 1rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: #cba6f7; }
+    button {
+      margin-top: 16px;
+      width: 100%;
+      padding: 10px;
+      border-radius: 8px;
+      border: none;
+      background: #cba6f7;
+      color: #1e1e2e;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #b4befe; }
+    #error {
+      margin-top: 10px;
+      font-size: 0.85rem;
+      color: #f38ba8;
+      min-height: 1.2em;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>🖥 Enter Kiosk URL</h2>
+    <input type="text" id="urlInput" placeholder="https://example.com" value="http://192.168.88.250:8080" autofocus />
+    <div id="error"></div>
+    <button id="okBtn">OK — Enter Kiosk Mode</button>
+  </div>
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    function submit() {
+      const raw = document.getElementById('urlInput').value.trim();
+      const err = document.getElementById('error');
+      if (!raw) { err.textContent = 'Please enter a URL.'; return; }
+      let url = raw;
+      if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+      err.textContent = '';
+      ipcRenderer.send('url-submitted', url);
+    }
+
+    document.getElementById('okBtn').addEventListener('click', submit);
+    document.getElementById('urlInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') submit();
+    });
+  </script>
+</body>
+</html>
