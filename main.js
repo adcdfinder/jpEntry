@@ -55,6 +55,21 @@ function setupSession() {
 
 let kioskSession = null;
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Returns {x, y} to center a dialog of given size on the same display as mainWindow.
+function dialogPosition(width, height) {
+  const ref = mainWindow || urlDialogWindow;
+  const display = ref
+    ? screen.getDisplayMatching(ref.getBounds())
+    : screen.getPrimaryDisplay();
+  const { x: dx, y: dy, width: dw, height: dh } = display.bounds;
+  return {
+    x: Math.round(dx + (dw - width) / 2),
+    y: Math.round(dy + (dh - height) / 2),
+  };
+}
+
 function createUrlDialog() {
   urlDialogWindow = new BrowserWindow({
     width: 520,
@@ -127,7 +142,9 @@ function createMainWindow(url, targetDisplay) {
 function createNavDialog() {
   if (navDialogWindow) { navDialogWindow.focus(); return; }
 
+  const { x, y } = dialogPosition(400, 450);
   navDialogWindow = new BrowserWindow({
+    x, y,
     width: 400,
     height: 450,
     resizable: false,
@@ -146,7 +163,9 @@ function createNavDialog() {
 function createPasteDialog() {
   if (pasteDialogWindow) { pasteDialogWindow.focus(); return; }
 
+  const { x, y } = dialogPosition(500, 320);
   pasteDialogWindow = new BrowserWindow({
+    x, y,
     width: 500,
     height: 320,
     resizable: false,
@@ -177,7 +196,9 @@ function createIframeDialog(iframeUrl) {
 
   pendingIframeUrl = iframeUrl;
 
+  const { x, y } = dialogPosition(460, 280);
   iframeDialogWindow = new BrowserWindow({
+    x, y,
     width: 460,
     height: 280,
     resizable: false,
