@@ -7,6 +7,7 @@ const {
   ipcMain,
   session,
   Menu,
+  screen,
 } = require('electron');
 const path = require('path');
 
@@ -34,6 +35,7 @@ let urlDialogWindow = null;
 let navDialogWindow = null;
 let iframeDialogWindow = null;
 let pasteDialogWindow = null;
+let pasteAborted = false;
 let rootUrl = null;          // URL entered at startup
 let pendingIframeUrl = null;
 const iframeQueue   = []; // queued iframe srcs waiting for user decision
@@ -70,10 +72,14 @@ function createUrlDialog() {
   urlDialogWindow.on('closed', () => { urlDialogWindow = null; });
 }
 
-function createMainWindow(url) {
+function createMainWindow(url, targetDisplay) {
   rootUrl = url;
 
+  const { x, y } = targetDisplay ? targetDisplay.bounds : { x: 0, y: 0 };
+
   mainWindow = new BrowserWindow({
+    x,
+    y,
     fullscreen: true,
     kiosk: true,
     icon: ICON,
@@ -153,7 +159,10 @@ function createPasteDialog() {
     },
   });
   pasteDialogWindow.loadFile(path.join(__dirname, 'paste-dialog.html'));
-  pasteDialogWindow.on('closed', () => { pasteDialogWindow = null; });
+  pasteDialogWindow.on('closed', () => {
+    pasteAborted = true;
+    pasteDialogWindow = null;
+  });
 }
 
 function createIframeDialog(iframeUrl) {
@@ -213,10 +222,16 @@ function registerShortcuts() {
 
 // User submitted URL in startup dialog
 ipcMain.on('url-submitted', (_event, url) => {
+  // Detect which display the URL dialog is currently on, so the kiosk
+  // opens on the same screen the user dragged the dialog to.
+  const targetDisplay = urlDialogWindow
+    ? screen.getDisplayMatching(urlDialogWindow.getBounds())
+    : screen.getPrimaryDisplay();
+
   if (urlDialogWindow) {
     urlDialogWindow.close();
   }
-  createMainWindow(url);
+  createMainWindow(url, targetDisplay);
 });
 
 // Navigation popup actions
@@ -265,8 +280,12 @@ ipcMain.on('iframe-action', (_event, action) => {
 // Chunks of CHUNK_SIZE chars are sent per animation frame to avoid UI stalls on large pastes.
 // \n → Return key, \t → Tab key, other chars via type:'char'.
 ipcMain.on('paste-apply', (_event, text) => {
-  if (pasteDialogWindow) pasteDialogWindow.close();
-  if (!mainWindow || !text) return;
+  if (!mainWindow || !text) {
+    if (pasteDialogWindow) pasteDialogWindow.close();
+    return;
+  }
+
+  pasteAborted = false;
 
   const CHUNK_SIZE = 20;
   const CHUNK_DELAY = 16; // ms between chunks (~1 frame)
@@ -282,9 +301,12 @@ ipcMain.on('paste-apply', (_event, text) => {
     })();
   `).finally(() => {
     const chars = Array.from(text); // handles multi-byte chars correctly
+    const total = chars.length;
     let i = 0;
 
     const sendNextChunk = () => {
+      if (pasteAborted || !mainWindow) return;
+
       const end = Math.min(i + CHUNK_SIZE, chars.length);
       while (i < end) {
         const char = chars[i++];
@@ -299,11 +321,28 @@ ipcMain.on('paste-apply', (_event, text) => {
           mainWindow.webContents.sendInputEvent({ type: 'char', keyCode: char });
         }
       }
-      if (i < chars.length) setTimeout(sendNextChunk, CHUNK_DELAY);
+
+      if (pasteDialogWindow && !pasteDialogWindow.isDestroyed()) {
+        pasteDialogWindow.webContents.send('paste-progress', { current: i, total });
+      }
+
+      if (i < chars.length) {
+        setTimeout(sendNextChunk, CHUNK_DELAY);
+      } else {
+        // Typing complete — close dialog after a brief pause so user sees 100%
+        setTimeout(() => {
+          if (pasteDialogWindow && !pasteDialogWindow.isDestroyed()) pasteDialogWindow.close();
+        }, 350);
+      }
     };
 
     setTimeout(sendNextChunk, 50); // brief pause after focus before typing
   });
+});
+
+ipcMain.on('paste-cancel-operation', () => {
+  pasteAborted = true;
+  if (pasteDialogWindow && !pasteDialogWindow.isDestroyed()) pasteDialogWindow.close();
 });
 
 ipcMain.on('paste-cancel', () => {
