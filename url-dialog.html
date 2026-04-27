@@ -30,20 +30,6 @@
       border: 1px solid rgba(0,0,0,0.06);
       animation: popIn 0.18s cubic-bezier(0.34, 1.3, 0.64, 1) both;
       color: #5C6773;
-      -webkit-app-region: drag;
-    }
-    input, button, #error {
-      -webkit-app-region: no-drag;
-    }
-    .drag-handle {
-      display: flex;
-      justify-content: center;
-      margin-bottom: 10px;
-      cursor: grab;
-      opacity: 0.3;
-      user-select: none;
-      letter-spacing: 3px;
-      font-size: 0.75rem;
     }
     h2 {
       font-size: 1.05rem;
@@ -92,7 +78,6 @@
 </head>
 <body>
   <div class="card">
-    <div class="drag-handle">⠿ ⠿ ⠿</div>
     <h2>🖥 Enter Kiosk URL</h2>
     <input type="text" id="urlInput" placeholder="https://example.com" value="http://192.168.88.250:8080" autofocus />
     <div id="error"></div>
