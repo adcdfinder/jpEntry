@@ -33,6 +33,19 @@
       flex-direction: column;
       gap: 12px;
       color: #5C6773;
+      -webkit-app-region: drag;
+    }
+    textarea, button {
+      -webkit-app-region: no-drag;
+    }
+    .drag-handle {
+      display: flex;
+      justify-content: center;
+      cursor: grab;
+      opacity: 0.3;
+      user-select: none;
+      letter-spacing: 3px;
+      font-size: 0.75rem;
     }
     .title {
       display: flex;
@@ -86,38 +99,114 @@
       border: 1.5px solid #E8E9EA;
     }
     #cancelBtn:hover { background: #F5F6F7; color: #5C6773; border-color: #D0D1D2; }
+
+    /* ── Progress view ── */
+    #inputSection {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #progressSection {
+      display: none;
+      flex-direction: column;
+      gap: 14px;
+      padding: 8px 0 4px;
+    }
+    #progressSection.visible { display: flex; }
+    .progress-label {
+      font-size: 0.85rem;
+      color: #8C95A0;
+      text-align: center;
+      letter-spacing: 0.01em;
+    }
+    .progress-track {
+      width: 100%;
+      height: 8px;
+      background: #EEF0F2;
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: #399EE6;
+      border-radius: 99px;
+      transition: width 0.12s ease;
+    }
+    #cancelTypingBtn {
+      background: transparent;
+      color: #B0B8C1;
+      border: 1.5px solid #E8E9EA;
+    }
+    #cancelTypingBtn:hover { background: #F5F6F7; color: #5C6773; border-color: #D0D1D2; }
   </style>
 </head>
 <body>
   <div class="card">
+    <div class="drag-handle">⠿ ⠿ ⠿</div>
     <div class="title">
       <span class="title-icon">📋</span>
       <span class="title-text">Paste Text</span>
     </div>
-    <textarea id="textInput" placeholder="Type or paste your text here…" autofocus></textarea>
-    <div class="actions">
-      <button id="cancelBtn">Cancel</button>
-      <button id="applyBtn">Apply</button>
+    <div id="inputSection">
+      <textarea id="textInput" placeholder="Type or paste your text here…" autofocus></textarea>
+      <div class="actions">
+        <button id="cancelBtn">Cancel</button>
+        <button id="applyBtn">Apply</button>
+      </div>
+    </div>
+
+    <div id="progressSection">
+      <div id="progressLabel" class="progress-label">Typing… 0 / 0</div>
+      <div class="progress-track">
+        <div id="progressFill" class="progress-fill"></div>
+      </div>
+      <button id="cancelTypingBtn">Cancel</button>
     </div>
   </div>
   <script>
     const { ipcRenderer } = require('electron');
 
-    document.getElementById('applyBtn').addEventListener('click', () => {
+    let totalChars = 0;
+
+    function startProgress(total) {
+      totalChars = total;
+      document.getElementById('inputSection').style.display = 'none';
+      document.getElementById('progressSection').classList.add('visible');
+      updateProgress(0, total);
+    }
+
+    function updateProgress(current, total) {
+      const pct = total > 0 ? Math.round((current / total) * 100) : 100;
+      document.getElementById('progressFill').style.width = pct + '%';
+      document.getElementById('progressLabel').textContent =
+        `Typing… ${current} / ${total}`;
+    }
+
+    function applyText() {
       const text = document.getElementById('textInput').value;
+      if (!text) return;
+      totalChars = Array.from(text).length;
       ipcRenderer.send('paste-apply', text);
-    });
+      startProgress(totalChars);
+    }
+
+    document.getElementById('applyBtn').addEventListener('click', applyText);
 
     document.getElementById('cancelBtn').addEventListener('click', () => {
       ipcRenderer.send('paste-cancel');
     });
 
-    // Apply on Ctrl+Enter for convenience
+    document.getElementById('cancelTypingBtn').addEventListener('click', () => {
+      ipcRenderer.send('paste-cancel-operation');
+    });
+
     document.getElementById('textInput').addEventListener('keydown', (e) => {
-      if (e.ctrlKey && e.key === 'Enter') {
-        const text = e.target.value;
-        ipcRenderer.send('paste-apply', text);
-      }
+      if (e.ctrlKey && e.key === 'Enter') applyText();
+    });
+
+    ipcRenderer.on('paste-progress', (_e, { current, total }) => {
+      updateProgress(current, total);
     });
   </script>
 </body>
