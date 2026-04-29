@@ -24,6 +24,12 @@ function checkIframes() {
 // Watch for dynamically added iframes
 const observer = new MutationObserver(() => checkIframes());
 
+// Allow main process to request a fresh iframe scan (e.g. from nav dialog)
+ipcRenderer.on('force-check-iframes', () => {
+  reportedSrcs.clear();
+  checkIframes();
+});
+
 window.addEventListener('DOMContentLoaded', () => {
   checkIframes();
   if (document.body) {

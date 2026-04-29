@@ -136,6 +136,12 @@ function createMainWindow(url, targetDisplay) {
     return { action: 'deny' }; // block the new window
   });
 
+  // Suppress "Leave site? Changes you made may not be saved" dialogs
+  // so they don't block our kiosk popup windows.
+  mainWindow.webContents.on('will-prevent-unload', (event) => {
+    event.preventDefault();
+  });
+
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
@@ -271,6 +277,11 @@ ipcMain.on('nav-action', (_event, action) => {
   }
 
   if (!mainWindow) return;
+
+  if (action === 'check-iframes') {
+    mainWindow.webContents.send('force-check-iframes');
+    return;
+  }
 
   if (action === 'root' && rootUrl) {
     mainWindow.loadURL(rootUrl);

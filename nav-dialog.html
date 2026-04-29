@@ -124,6 +124,9 @@
       <button id="pasteBtn">
         <span class="btn-icon">📋</span>Paste Text
       </button>
+      <button id="iframeBtn">
+        <span class="btn-icon">🔍</span>Detect Iframes
+      </button>
     </div>
     <hr class="divider" />
     <div class="nav-group">
@@ -139,6 +142,7 @@
     document.getElementById('backBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'back'));
     document.getElementById('pasteBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'paste'));
     document.getElementById('quitBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'quit'));
+    document.getElementById('iframeBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'check-iframes'));
     document.getElementById('cancelBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'cancel'));
   </script>
 </body>
