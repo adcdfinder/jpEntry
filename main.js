@@ -81,10 +81,36 @@ function dialogPosition(width, height) {
   const display = ref
     ? screen.getDisplayMatching(ref.getBounds())
     : screen.getPrimaryDisplay();
-  const { x: dx, y: dy, width: dw, height: dh } = display.bounds;
+  const { x: dx, y: dy, width: dw, height: dh } = display.workArea || display.bounds;
   return {
     x: Math.round(dx + (dw - width) / 2),
     y: Math.round(dy + (dh - height) / 2),
+  };
+}
+
+function dialogBounds(preferredWidth, preferredHeight, minWidth, minHeight) {
+  const ref = mainWindow || urlDialogWindow;
+  const display = ref
+    ? screen.getDisplayMatching(ref.getBounds())
+    : screen.getPrimaryDisplay();
+  const area = display.workArea || display.bounds;
+  const margin = 32;
+  const maxWidth = Math.max(Math.min(minWidth, area.width), area.width - margin);
+  const maxHeight = Math.max(Math.min(minHeight, area.height), area.height - margin);
+  const width = Math.max(
+    320,
+    Math.min(preferredWidth, maxWidth)
+  );
+  const height = Math.max(
+    360,
+    Math.min(preferredHeight, maxHeight)
+  );
+
+  return {
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + (area.height - height) / 2),
+    width,
+    height,
   };
 }
 
@@ -524,11 +550,11 @@ function createNavDialog() {
 function createPasteDialog(initialText = '', source = 'manual') {
   if (pasteDialogWindow) { pasteDialogWindow.focus(); return; }
 
-  const { x, y } = dialogPosition(540, 470);
+  const { x, y, width, height } = dialogBounds(620, 620, 520, 500);
   pasteDialogWindow = new BrowserWindow({
     x, y,
-    width: 540,
-    height: 470,
+    width,
+    height,
     resizable: false,
     frame: false,
     transparent: true,

@@ -17,8 +17,9 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      height: 100vh;
-      overflow: hidden;
+      min-height: 100vh;
+      overflow: auto;
+      padding: 18px;
       color: #5C6773;
     }
 
@@ -26,12 +27,16 @@
       background: transparent;
       justify-content: flex-end;
       align-items: flex-start;
-      padding: 20px;
+      min-height: 100vh;
+      overflow: hidden;
+      padding: 18px;
       pointer-events: none;
     }
 
     .card {
-      width: 500px;
+      width: min(560px, calc(100vw - 36px));
+      max-height: calc(100vh - 36px);
+      overflow: auto;
       background: #FFFFFF;
       border: 1px solid rgba(0,0,0,0.06);
       border-radius: 14px;
@@ -44,7 +49,9 @@
     }
 
     body.is-running .card {
-      width: 360px;
+      width: min(360px, calc(100vw - 36px));
+      max-height: none;
+      overflow: hidden;
       background: rgba(255,255,255,0.78);
       border-color: rgba(57,158,230,0.28);
       box-shadow: 0 10px 34px rgba(0,0,0,0.18);
@@ -281,6 +288,32 @@
     }
 
     #cancelBtn:hover { background: #F5F6F7; color: #4D5965; border-color: #D0D5DA; }
+
+    @media (max-width: 560px) {
+      body {
+        align-items: flex-start;
+        padding: 12px;
+      }
+
+      body.is-running {
+        padding: 12px;
+      }
+
+      .card {
+        width: calc(100vw - 24px);
+        max-height: calc(100vh - 24px);
+        padding: 18px 16px 16px;
+        gap: 10px;
+      }
+
+      .meta {
+        grid-template-columns: 1fr;
+      }
+
+      textarea {
+        height: 130px;
+      }
+    }
   </style>
 </head>
 <body>
