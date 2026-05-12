@@ -2,123 +2,573 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>Paste Text</title>
+  <title>Bastion Paste</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     @keyframes popIn {
       from { opacity: 0; transform: scale(0.96) translateY(8px); }
-      to   { opacity: 1; transform: scale(1)    translateY(0);   }
+      to   { opacity: 1; transform: scale(1) translateY(0); }
     }
 
     body {
       font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
       background: #F0F2F4;
       display: flex;
-      flex-direction: column;
       justify-content: center;
       align-items: center;
       height: 100vh;
       overflow: hidden;
+      color: #5C6773;
     }
+
+    body.is-running {
+      background: transparent;
+      justify-content: flex-end;
+      align-items: flex-start;
+      padding: 20px;
+      pointer-events: none;
+    }
+
     .card {
+      width: 500px;
       background: #FFFFFF;
-      border-radius: 16px;
-      padding: 24px 24px 20px;
-      width: 460px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 8px 32px rgba(0,0,0,0.10);
       border: 1px solid rgba(0,0,0,0.06);
+      border-radius: 14px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 8px 32px rgba(0,0,0,0.10);
+      padding: 22px 22px 18px;
       animation: popIn 0.18s cubic-bezier(0.34, 1.3, 0.64, 1) both;
       display: flex;
       flex-direction: column;
       gap: 12px;
-      color: #5C6773;
     }
+
+    body.is-running .card {
+      width: 360px;
+      background: rgba(255,255,255,0.78);
+      border-color: rgba(57,158,230,0.28);
+      box-shadow: 0 10px 34px rgba(0,0,0,0.18);
+      backdrop-filter: blur(8px);
+      padding: 16px;
+      gap: 9px;
+      pointer-events: none;
+    }
+
+    body.is-running .meta,
+    body.is-running .speed-control,
+    body.is-running .hurry-option,
+    body.is-running textarea,
+    body.is-running .actions {
+      display: none;
+    }
+
+    body.is-running .title {
+      padding-bottom: 8px;
+    }
+
+    body.is-running .subtitle,
+    body.is-running .status,
+    body.is-running .progress-line {
+      color: rgba(76,87,99,0.95);
+    }
+
+    body.is-running .title-text {
+      color: #287FBA;
+    }
+
+    body.is-running .progress-wrap {
+      display: flex;
+    }
+
     .title {
       display: flex;
-      align-items: center;
-      gap: 9px;
+      flex-direction: column;
+      gap: 5px;
       padding-bottom: 12px;
       border-bottom: 1px solid #F0F1F2;
     }
-    .title-icon { font-size: 1.2rem; line-height: 1; }
+
     .title-text {
       font-size: 1rem;
       font-weight: 700;
       color: #399EE6;
-      letter-spacing: 0.01em;
     }
+
+    .subtitle {
+      font-size: 0.82rem;
+      color: #7C8793;
+      line-height: 1.35;
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .meta-item {
+      background: #F8F9FA;
+      border: 1px solid #E8E9EA;
+      border-radius: 8px;
+      padding: 9px 10px;
+    }
+
+    .meta-label {
+      display: block;
+      color: #8A949F;
+      font-size: 0.72rem;
+      margin-bottom: 3px;
+    }
+
+    .meta-value {
+      color: #46515C;
+      font-size: 0.9rem;
+      font-weight: 650;
+    }
+
+    .speed-control {
+      background: #F8F9FA;
+      border: 1px solid #E8E9EA;
+      border-radius: 8px;
+      padding: 10px 11px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .speed-control.hurry-enabled {
+      opacity: 0.62;
+    }
+
+    .speed-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .speed-title {
+      color: #46515C;
+      font-size: 0.82rem;
+      font-weight: 650;
+    }
+
+    .speed-value {
+      color: #399EE6;
+      font-size: 0.82rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: #399EE6;
+    }
+
+    input[type="range"]:disabled {
+      accent-color: #A8B0B8;
+      cursor: not-allowed;
+    }
+
+    .hurry-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #FFF9EA;
+      border: 1px solid #F1D58A;
+      color: #7B6120;
+      border-radius: 8px;
+      padding: 9px 10px;
+      font-size: 0.82rem;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .hurry-option input {
+      width: 15px;
+      height: 15px;
+      accent-color: #D39420;
+    }
+
     textarea {
       width: 100%;
-      height: 155px;
+      height: 145px;
       background: #F8F9FA;
-      color: #5C6773;
+      color: #4D5965;
       border: 1.5px solid #E0E1E2;
-      border-radius: 10px;
+      border-radius: 8px;
       padding: 11px 13px;
-      font-family: 'Segoe UI', sans-serif;
-      font-size: 0.93rem;
+      font-family: 'Segoe UI', Consolas, monospace;
+      font-size: 0.9rem;
       resize: none;
       outline: none;
       transition: border-color 0.18s, background 0.18s;
+      white-space: pre;
     }
+
     textarea:focus {
       border-color: #399EE6;
       background: #FFFFFF;
     }
-    .actions { display: flex; gap: 9px; }
+
+    textarea:disabled {
+      color: #74808C;
+      background: #F4F6F8;
+    }
+
+    .progress-wrap {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .progress-line {
+      display: flex;
+      justify-content: space-between;
+      color: #7C8793;
+      font-size: 0.78rem;
+    }
+
+    .progress {
+      height: 7px;
+      width: 100%;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #E8ECF0;
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #399EE6;
+      transition: width 0.12s linear;
+    }
+
+    .status {
+      min-height: 1.1em;
+      color: #7C8793;
+      font-size: 0.78rem;
+    }
+
+    .status.error { color: #D85050; }
+
+    .actions {
+      display: flex;
+      gap: 9px;
+    }
+
     button {
       flex: 1;
       padding: 10px;
-      border-radius: 10px;
+      border-radius: 8px;
       border: none;
       font-size: 0.9rem;
-      font-weight: 600;
+      font-weight: 650;
       cursor: pointer;
-      transition: background 0.15s, transform 0.1s;
+      transition: background 0.15s, transform 0.1s, border-color 0.15s;
     }
-    button:active { transform: scale(0.97); }
+
+    button:active { transform: scale(0.98); }
+
     #applyBtn { background: #399EE6; color: #FFFFFF; }
     #applyBtn:hover { background: #55AAEE; }
+    #applyBtn:disabled { background: #A8CFEA; cursor: default; }
+
     #cancelBtn {
       background: transparent;
-      color: #B0B8C1;
-      border: 1.5px solid #E8E9EA;
+      color: #7C8793;
+      border: 1.5px solid #E1E4E8;
     }
-    #cancelBtn:hover { background: #F5F6F7; color: #5C6773; border-color: #D0D1D2; }
+
+    #cancelBtn:hover { background: #F5F6F7; color: #4D5965; border-color: #D0D5DA; }
   </style>
 </head>
 <body>
   <div class="card">
     <div class="title">
-      <span class="title-icon">📋</span>
-      <span class="title-text">Paste Text</span>
+      <span class="title-text">Bastion Paste Confirmation</span>
+      <span id="subtitle" class="subtitle">Review the text before simulated typing starts. Press Esc to stop while typing.</span>
     </div>
-    <textarea id="textInput" placeholder="Type or paste your text here…" autofocus></textarea>
+
+    <div class="meta">
+      <div class="meta-item">
+        <span class="meta-label">Characters</span>
+        <span id="charCount" class="meta-value">0</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">Estimated time</span>
+        <span id="estimate" class="meta-value">0s</span>
+      </div>
+    </div>
+
+    <div class="speed-control">
+      <div class="speed-head">
+        <span class="speed-title">Typing speed</span>
+        <span id="speedValue" class="speed-value">25 chars/sec</span>
+      </div>
+      <input id="speedInput" type="range" min="5" max="80" step="1" value="25" />
+    </div>
+
+    <label class="hurry-option">
+      <input id="hurryInput" type="checkbox" />
+      <span>Hurry for Toilet</span>
+    </label>
+
+    <textarea id="textInput" placeholder="Paste or type the text to send" autofocus></textarea>
+
+    <div id="progressWrap" class="progress-wrap">
+      <div class="progress-line">
+        <span id="progressStatus">Typing is locked. Esc cancels.</span>
+        <span id="progressText">0%</span>
+      </div>
+      <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
+    </div>
+
+    <div id="status" class="status"></div>
+
     <div class="actions">
       <button id="cancelBtn">Cancel</button>
-      <button id="applyBtn">Apply</button>
+      <button id="applyBtn">Start Typing</button>
     </div>
   </div>
+
   <script>
     const { ipcRenderer } = require('electron');
 
-    document.getElementById('applyBtn').addEventListener('click', () => {
-      const text = document.getElementById('textInput').value;
-      ipcRenderer.send('paste-apply', text);
+    const textInput = document.getElementById('textInput');
+    const charCount = document.getElementById('charCount');
+    const estimate = document.getElementById('estimate');
+    const subtitle = document.getElementById('subtitle');
+    const status = document.getElementById('status');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const applyBtn = document.getElementById('applyBtn');
+    const progressWrap = document.getElementById('progressWrap');
+    const progressStatus = document.getElementById('progressStatus');
+    const progressText = document.getElementById('progressText');
+    const progressBar = document.getElementById('progressBar');
+    const speedInput = document.getElementById('speedInput');
+    const speedValue = document.getElementById('speedValue');
+    const speedControl = document.querySelector('.speed-control');
+    const hurryInput = document.getElementById('hurryInput');
+
+    let running = false;
+    let estimateTimer = null;
+    let estimateConfig = {
+      defaultCharsPerSecond: 25,
+      minCharsPerSecond: 5,
+      maxCharsPerSecond: 80,
+      focusDelayMs: 500,
+      primeDelayMs: 150,
+      finishDelayMs: 350,
+      hurryBatchSize: 20,
+      hurryBatchDelayMs: 16,
+    };
+
+    function formatDuration(ms) {
+      if (!ms) return '0s';
+      if (ms < 1000) return '<1s';
+      const seconds = Math.ceil(ms / 1000);
+      if (seconds < 60) return seconds + 's';
+      const minutes = Math.floor(seconds / 60);
+      const rest = seconds % 60;
+      return minutes + 'm ' + String(rest).padStart(2, '0') + 's';
+    }
+
+    function getSpeed() {
+      const value = Number(speedInput.value);
+      if (!Number.isFinite(value)) return estimateConfig.defaultCharsPerSecond;
+      return Math.max(
+        estimateConfig.minCharsPerSecond,
+        Math.min(estimateConfig.maxCharsPerSecond, Math.round(value))
+      );
+    }
+
+    function updateSpeedLabel() {
+      speedValue.textContent = hurryInput.checked
+        ? '20 chars / 16ms'
+        : getSpeed() + ' chars/sec';
+    }
+
+    function updateHurryState() {
+      const enabled = hurryInput.checked;
+      speedInput.disabled = running || enabled;
+      speedControl.classList.toggle('hurry-enabled', enabled);
+      updateSpeedLabel();
+    }
+
+    function localEstimate(text) {
+      const total = Array.from(text || '').length;
+      if (!total) return 0;
+      const typingMs = hurryInput.checked
+        ? Math.ceil(total / estimateConfig.hurryBatchSize) * estimateConfig.hurryBatchDelayMs
+        : total * Math.round(1000 / getSpeed());
+      return estimateConfig.focusDelayMs +
+        estimateConfig.primeDelayMs +
+        typingMs +
+        estimateConfig.finishDelayMs;
+    }
+
+    function updateSummary(ms) {
+      const text = textInput.value;
+      charCount.textContent = String(Array.from(text).length);
+      estimate.textContent = formatDuration(ms == null ? localEstimate(text) : ms);
+    }
+
+    function requestEstimate() {
+      clearTimeout(estimateTimer);
+      updateSummary();
+      estimateTimer = setTimeout(() => {
+        ipcRenderer.invoke('paste-estimate', {
+          text: textInput.value,
+          charsPerSecond: getSpeed(),
+          hurryMode: hurryInput.checked,
+        })
+          .then(updateSummary)
+          .catch(() => updateSummary());
+      }, 120);
+    }
+
+    function setRunning(nextRunning) {
+      running = nextRunning;
+      textInput.disabled = nextRunning;
+      hurryInput.disabled = nextRunning;
+      updateHurryState();
+      applyBtn.disabled = nextRunning;
+      cancelBtn.textContent = nextRunning ? 'Stop (Esc)' : 'Cancel';
+      document.body.classList.toggle('is-running', nextRunning);
+      progressWrap.style.display = nextRunning ? 'flex' : 'none';
+      status.className = 'status';
+      status.textContent = nextRunning
+        ? 'The kiosk page is locked. Typing starts after focus handoff and a warm-up key.'
+        : '';
+    }
+
+    function startTyping() {
+      if (running) return;
+      const text = textInput.value;
+      if (!text) {
+        status.className = 'status error';
+        status.textContent = 'There is no text to type.';
+        textInput.focus();
+        return;
+      }
+
+      setRunning(true);
+      progressText.textContent = '0%';
+      progressBar.style.width = '0%';
+      progressStatus.textContent = 'Typing is locked. Esc cancels.';
+      ipcRenderer.send('paste-apply', {
+        text,
+        charsPerSecond: getSpeed(),
+        hurryMode: hurryInput.checked,
+      });
+    }
+
+    applyBtn.addEventListener('click', startTyping);
+
+    cancelBtn.addEventListener('click', () => {
+      ipcRenderer.send(running ? 'paste-cancel-operation' : 'paste-cancel');
     });
 
-    document.getElementById('cancelBtn').addEventListener('click', () => {
-      ipcRenderer.send('paste-cancel');
+    textInput.addEventListener('input', requestEstimate);
+    speedInput.addEventListener('input', () => {
+      updateSpeedLabel();
+      requestEstimate();
+    });
+    hurryInput.addEventListener('change', () => {
+      updateHurryState();
+      requestEstimate();
     });
 
-    // Apply on Ctrl+Enter for convenience
-    document.getElementById('textInput').addEventListener('keydown', (e) => {
+    textInput.addEventListener('keydown', (e) => {
       if (e.ctrlKey && e.key === 'Enter') {
-        const text = e.target.value;
-        ipcRenderer.send('paste-apply', text);
+        startTyping();
       }
     });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        ipcRenderer.send(running ? 'paste-cancel-operation' : 'paste-cancel');
+      }
+    });
+
+    ipcRenderer.on('paste-init', (_event, payload) => {
+      if (payload && payload.text) {
+        textInput.value = payload.text;
+      }
+
+      if (payload) {
+        estimateConfig = {
+          defaultCharsPerSecond: payload.defaultCharsPerSecond || estimateConfig.defaultCharsPerSecond,
+          minCharsPerSecond: payload.minCharsPerSecond || estimateConfig.minCharsPerSecond,
+          maxCharsPerSecond: payload.maxCharsPerSecond || estimateConfig.maxCharsPerSecond,
+          focusDelayMs: payload.focusDelayMs || estimateConfig.focusDelayMs,
+          primeDelayMs: payload.primeDelayMs || estimateConfig.primeDelayMs,
+          finishDelayMs: payload.finishDelayMs || estimateConfig.finishDelayMs,
+          hurryBatchSize: payload.hurryBatchSize || estimateConfig.hurryBatchSize,
+          hurryBatchDelayMs: payload.hurryBatchDelayMs || estimateConfig.hurryBatchDelayMs,
+        };
+        speedInput.min = String(estimateConfig.minCharsPerSecond);
+        speedInput.max = String(estimateConfig.maxCharsPerSecond);
+        speedInput.value = String(estimateConfig.defaultCharsPerSecond);
+        updateHurryState();
+      }
+
+      if (payload && payload.source === 'shortcut') {
+        subtitle.textContent = 'Clipboard text is ready. Confirm before simulated typing starts. Press Esc to stop while typing.';
+      }
+
+      updateSummary(payload ? payload.estimateMs : null);
+      textInput.focus();
+      textInput.setSelectionRange(textInput.value.length, textInput.value.length);
+
+      if (!textInput.value) {
+        status.className = payload && payload.source === 'shortcut'
+          ? 'status error'
+          : 'status';
+        status.textContent = payload && payload.source === 'shortcut'
+          ? 'Clipboard is empty. Type text here or cancel.'
+          : 'Type or paste text here before starting.';
+      }
+    });
+
+    ipcRenderer.on('paste-started', (_event, payload) => {
+      setRunning(true);
+      updateSummary(payload ? payload.estimateMs : null);
+    });
+
+    ipcRenderer.on('paste-progress', (_event, payload) => {
+      const total = payload.total || 1;
+      const percent = Math.min(100, Math.round((payload.current / total) * 100));
+      progressText.textContent = percent + '%';
+      progressBar.style.width = percent + '%';
+    });
+
+    ipcRenderer.on('paste-complete', () => {
+      progressText.textContent = '100%';
+      progressBar.style.width = '100%';
+      progressStatus.textContent = 'Typing complete.';
+      status.textContent = 'Done.';
+    });
+
+    ipcRenderer.on('paste-canceled', () => {
+      progressStatus.textContent = 'Typing canceled.';
+      status.className = 'status error';
+      status.textContent = 'Stopped by Esc.';
+    });
+
+    ipcRenderer.on('paste-empty', () => {
+      setRunning(false);
+      status.className = 'status error';
+      status.textContent = 'There is no text to type.';
+      textInput.disabled = false;
+      hurryInput.disabled = false;
+      updateHurryState();
+      textInput.focus();
+    });
+
+    updateHurryState();
+    requestEstimate();
   </script>
 </body>
 </html>
