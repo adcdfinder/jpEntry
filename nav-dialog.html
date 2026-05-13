@@ -84,6 +84,13 @@
     #pasteBtn { background: #F5F6F7; }
     #pasteBtn:hover { background: #EAEBEC; }
 
+    #clearAllCredentialsBtn {
+      background: #F5F6F7;
+    }
+    #clearAllCredentialsBtn:hover {
+      background: #EAEBEC;
+    }
+
     #quitBtn  {
       background: #FFF3F3;
       color: #E05858;
@@ -130,6 +137,12 @@
     </div>
     <hr class="divider" />
     <div class="nav-group">
+      <button id="clearAllCredentialsBtn">
+        Clear All Passwords
+      </button>
+    </div>
+    <hr class="divider" />
+    <div class="nav-group">
       <button id="quitBtn">
         <span class="btn-icon">⏻</span>Close Application
       </button>
@@ -143,6 +156,7 @@
     document.getElementById('pasteBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'paste'));
     document.getElementById('quitBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'quit'));
     document.getElementById('iframeBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'check-iframes'));
+    document.getElementById('clearAllCredentialsBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'clear-all-credentials'));
     document.getElementById('cancelBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'cancel'));
   </script>
 </body>

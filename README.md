@@ -13,7 +13,8 @@ As you can see, the application is all generated with AI. The initial requiremen
 | **Startup URL dialog** | Popup on launch to enter the target URL (default: `http://192.168.88.250:8080`) |
 | **Kiosk mode** | Full-screen, no browser chrome, no taskbar access after URL is confirmed |
 | **Navigation popup** | `Ctrl+Alt+H` reveals operator controls |
-| **Paste dialog** | Type or paste text into a dialog; on Apply it is injected into the focused input on the page |
+| **Paste dialog** | `Ctrl+Alt+V` opens a confirmation dialog for paced simulated typing into the focused input/terminal |
+| **Password saving** | Detects submitted login forms, asks before saving, encrypts saved passwords locally, and autofills the same site later |
 | **New-window redirect** | All `target="_blank"` links and `window.open()` calls load inside the main window |
 | **iframe detection** | When a page embeds an iframe, a popup asks whether to navigate to the iframe URL in the main window |
 | **No menu bar** | File / Edit / View menu is removed from all windows |
@@ -26,21 +27,23 @@ As you can see, the application is all generated with AI. The initial requiremen
 | Shortcut | Action |
 |---|---|
 | `Ctrl+Alt+H` | Open navigation popup |
+| `Ctrl+Alt+V` | Open clipboard paste confirmation |
 
 ### Navigation Popup Options
 
 - 🏠 **Go to Root Page** — reload the startup URL
 - ⬅ **Go to Last Page** — go back one step in history
 - 📋 **Paste Text** — open the paste dialog to inject text into the focused input
+- **Clear All Passwords** — remove all passwords saved by JP Entry
 - ⏻ **Close Application** — quit the app
 - **Cancel** — dismiss the popup
 
 ### Paste Dialog
 
-Open via the **Paste Text** button in the navigation popup:
+Open via `Ctrl+Alt+V` or the **Paste Text** button in the navigation popup:
 
 1. Focus an input field on the web page
-2. Press `Ctrl+Alt+H` → click **Paste Text**
+2. Press `Ctrl+Alt+V` directly, or press `Ctrl+Alt+H` and click **Paste Text**
 3. Type or paste your text into the dialog
 4. Click **Apply** (or press `Ctrl+Enter`) — the text is injected into the previously focused input
 5. Click **Cancel** to discard
@@ -113,7 +116,7 @@ If `electron-builder` cannot download its binaries automatically:
 
 - Creates the **URL dialog** window on startup (non-kiosk, always-on-top)
 - After URL is submitted via IPC, creates the **main kiosk window** (`kiosk: true`, `fullscreen: true`)
-- Registers global shortcuts (`Ctrl+Alt+H`, `Ctrl+Alt+Shift+Q`)
+- Registers global shortcuts (`Ctrl+Alt+H`, `Ctrl+Alt+V`, `Ctrl+Alt+Shift+Q`)
 - Handles `setWindowOpenHandler` to redirect all new-window requests into the main window
 - Manages an **iframe queue** — when multiple iframes are detected simultaneously, dialogs are shown sequentially
 - Session uses `partition: 'persist:kiosk'` — data stored in `%APPDATA%\jp-entry\Partitions\persist_kiosk\`
@@ -136,6 +139,12 @@ Session data is stored on disk using Electron's named partition `persist:kiosk`.
 - Cache
 
 Data survives app restarts. To clear it, delete the partition folder in `%APPDATA%\jp-entry\`.
+
+### Password Persistence
+
+Saved passwords are stored separately from browser session data in `.electron-data\credentials.json`.
+Passwords are encrypted with Electron `safeStorage` before they are written to disk. JP Entry prompts
+before saving or updating a password, and it stores one credential per site origin.
 
 ---
 
