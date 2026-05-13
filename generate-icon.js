@@ -168,8 +168,8 @@ function buildICO(sizes) {
   let dataOffset = dirBytes;
   for (let i = 0; i < count; i++) {
     const sz = sizes[i];
-    buf.writeUInt8(sz >= 256 ? 0 : sz, off++); // width  (0 means 256)
-    buf.writeUInt8(sz >= 256 ? 0 : sz, off++); // height
+    buf.writeUInt8(sz >= 512 ? 0 : sz, off++); // width  (0 means 256)
+    buf.writeUInt8(sz >= 512 ? 0 : sz, off++); // height
     buf.writeUInt8(0, off++);                   // colorCount
     buf.writeUInt8(0, off++);                   // reserved
     buf.writeUInt16LE(1, off); off += 2;        // planes
@@ -185,5 +185,5 @@ function buildICO(sizes) {
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 const outPath = path.join(__dirname, 'icon.ico');
-fs.writeFileSync(outPath, buildICO([16, 32, 48, 256]));
+fs.writeFileSync(outPath, buildICO([16, 32, 48, 512]));
 console.log(`icon.ico written to ${outPath}`);

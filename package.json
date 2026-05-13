@@ -2,7 +2,10 @@
   "name": "jp-entry",
   "version": "1.0.2",
   "description": "Electron Kiosk Application",
-  "author": "OpenGeoLab",
+  "author": {
+    "name":"adcdfinder",
+    "email": "adcdfinder@example.com"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -16,7 +19,7 @@
   "build": {
     "appId": "com.opengeolabs.jpentry",
     "productName": "JP Entry",
-    "icon": "icon.ico",
+    "icon": "icon.png",
     "files": [
       "main.js",
       "preload.js",
