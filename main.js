@@ -20,7 +20,9 @@ app.setAppUserModelId('com.opengeolabs.jpentry');
 
 // Redirect userData to app directory to avoid cache access-denied errors
 // when the default %APPDATA% path is not writable (kiosk user accounts).
-app.setPath('userData', path.join(__dirname, '.electron-data'));
+if (process.platform === 'win32') {
+  app.setPath('userData', path.join(__dirname, '.electron-data'));
+}
 
 // ── GPU / rendering optimisation (Windows) ───────────────────────────────────
 // Must be set before app.whenReady()
