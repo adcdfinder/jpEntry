@@ -88,6 +88,26 @@
       color: #E05858;
       min-height: 1.1em;
     }
+    .checkbox-row {
+      -webkit-app-region: no-drag;
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.88rem;
+      color: #5C6773;
+    }
+    .checkbox-row input[type="checkbox"] {
+      -webkit-app-region: no-drag;
+      width: 16px;
+      height: 16px;
+      accent-color: #399EE6;
+      cursor: pointer;
+    }
+    .checkbox-row label {
+      cursor: pointer;
+      user-select: none;
+    }
   </style>
 </head>
 <body>
@@ -96,6 +116,10 @@
     <h2>🖥 Enter Kiosk URL</h2>
     <input type="text" id="urlInput" placeholder="https://example.com" value="http://192.168.88.250:8080" autofocus />
     <div id="error"></div>
+    <div class="checkbox-row">
+      <input type="checkbox" id="fullscreenCheck" checked />
+      <label for="fullscreenCheck">Enter full screen mode</label>
+    </div>
     <button id="okBtn">OK — Enter Kiosk Mode</button>
   </div>
   <script>
@@ -108,7 +132,8 @@
       let url = raw;
       if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
       err.textContent = '';
-      ipcRenderer.send('url-submitted', url);
+      const fullscreen = document.getElementById('fullscreenCheck').checked;
+      ipcRenderer.send('url-submitted', { url, fullscreen });
     }
 
     document.getElementById('okBtn').addEventListener('click', submit);

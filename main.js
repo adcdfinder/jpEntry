@@ -438,7 +438,7 @@ function openClipboardPasteDialog() {
 function createUrlDialog() {
   urlDialogWindow = new BrowserWindow({
     width: 520,
-    height: 280,
+    height: 310,
     resizable: false,
     frame: false,
     alwaysOnTop: true,
@@ -452,7 +452,7 @@ function createUrlDialog() {
   urlDialogWindow.on('closed', () => { urlDialogWindow = null; });
 }
 
-function createMainWindow(url, targetDisplay) {
+function createMainWindow(url, targetDisplay, fullscreen = true) {
   rootUrl = url;
 
   const { x, y } = targetDisplay ? targetDisplay.bounds : { x: 0, y: 0 };
@@ -460,8 +460,8 @@ function createMainWindow(url, targetDisplay) {
   mainWindow = new BrowserWindow({
     x,
     y,
-    fullscreen: true,
-    kiosk: true,
+    fullscreen: fullscreen,
+    kiosk: false,
     icon: ICON,
     webPreferences: {
       nodeIntegration: false,
@@ -712,7 +712,7 @@ function registerShortcuts() {
 // ── IPC handlers ─────────────────────────────────────────────────────────────
 
 // User submitted URL in startup dialog
-ipcMain.on('url-submitted', (_event, url) => {
+ipcMain.on('url-submitted', (_event, payload) => {
   // Detect which display the URL dialog is currently on, so the kiosk
   // opens on the same screen the user dragged the dialog to.
   const targetDisplay = urlDialogWindow
@@ -722,7 +722,9 @@ ipcMain.on('url-submitted', (_event, url) => {
   if (urlDialogWindow) {
     urlDialogWindow.close();
   }
-  createMainWindow(url, targetDisplay);
+  const url = typeof payload === 'string' ? payload : payload.url;
+  const fullscreen = typeof payload === 'string' ? true : Boolean(payload.fullscreen);
+  createMainWindow(url, targetDisplay, fullscreen);
 });
 
 // Navigation popup actions
