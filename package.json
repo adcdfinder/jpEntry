@@ -9,8 +9,12 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test",
     "build": "electron-builder --win",
     "dist:appimage": "electron-builder --linux AppImage"
+  },
+  "dependencies": {
+    "otplib": "^12.0.1"
   },
   "devDependencies": {
     "electron": "^30.0.0",
@@ -23,6 +27,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "otp-autofill.js",
       "*.html",
       "icon.ico"
     ],

@@ -14,6 +14,13 @@ const {
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { authenticator } = require('otplib');
+
+const {
+  OTP_LOGIN_URL,
+  normalizeOtpSecret,
+  otpTokenFromSecret,
+} = require('./otp-autofill');
 
 // Required for Windows notifications / taskbar grouping
 app.setAppUserModelId('com.opengeolabs.jpentry');
@@ -210,14 +217,30 @@ function getCredential(origin) {
     origin: normalizedOrigin,
     username: record.username || '',
     password,
+    mfaSecret: record.mfaSecret || '',
     updatedAt: record.updatedAt || null,
   };
+}
+
+function getCredentialRecord(origin) {
+  const normalizedOrigin = normalizeOrigin(origin);
+  if (!normalizedOrigin) return null;
+
+  const store = readCredentialStore();
+  return store.credentials[normalizedOrigin] || null;
+}
+
+function isValidMfaSecret(secret) {
+  return Boolean(otpTokenFromSecret(authenticator, secret));
 }
 
 function saveCredential(credential) {
   const origin = normalizeOrigin(credential && credential.origin);
   const password = credential && credential.password;
   if (!origin || !password) return false;
+
+  const mfaSecret = normalizeOtpSecret((credential && credential.mfaSecret) || '');
+  if (!mfaSecret || !isValidMfaSecret(mfaSecret)) return false;
 
   const encryptedPassword = encryptPassword(password);
   if (!encryptedPassword) return false;
@@ -228,6 +251,7 @@ function saveCredential(credential) {
   store.credentials[origin] = {
     username: String((credential && credential.username) || ''),
     password: encryptedPassword,
+    mfaSecret,
     createdAt: existing && existing.createdAt ? existing.createdAt : now,
     updatedAt: now,
   };
@@ -257,6 +281,7 @@ function shouldPromptForCredential(candidate) {
 
   const existing = getCredential(candidate.origin);
   if (!existing) return 'save';
+  if (!existing.mfaSecret) return 'mfa';
 
   if (
     existing.username === String(candidate.username || '') &&
@@ -266,6 +291,33 @@ function shouldPromptForCredential(candidate) {
   }
 
   return 'update';
+}
+
+function otpOrigin() {
+  return normalizeOrigin(OTP_LOGIN_URL);
+}
+
+function getOtpTokenForUrl(url) {
+  if (!url || normalizeUrlWithoutSearch(url) !== normalizeUrlWithoutSearch(OTP_LOGIN_URL)) {
+    return null;
+  }
+
+  const credential = getCredential(otpOrigin());
+  if (!credential || !credential.mfaSecret) return null;
+
+  return otpTokenFromSecret(authenticator, credential.mfaSecret);
+}
+
+function normalizeUrlWithoutSearch(value) {
+  try {
+    const url = new URL(value);
+    url.search = '';
+    url.hash = '';
+    url.pathname = String(url.pathname || '/').replace(/\/+$/, '') || '/';
+    return url.toString();
+  } catch (_err) {
+    return null;
+  }
 }
 
 function pasteCharacters(text) {
@@ -435,6 +487,22 @@ function openClipboardPasteDialog() {
   createPasteDialog(text, 'shortcut');
 }
 
+function requestOtpFillSoon() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  mainWindow.webContents.send('otp-fill-now');
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('otp-fill-now');
+    }
+  }, 500);
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('otp-fill-now');
+    }
+  }, 1200);
+}
+
 function createUrlDialog() {
   urlDialogWindow = new BrowserWindow({
     width: 520,
@@ -525,8 +593,15 @@ function createMainWindow(url, targetDisplay, fullscreen = true) {
     `).catch(() => {});
   }
   mainWindow.webContents.on('did-finish-load', injectFocusTracker);
-  mainWindow.webContents.on('did-navigate', injectFocusTracker);
-  mainWindow.webContents.on('did-navigate-in-page', injectFocusTracker);
+  mainWindow.webContents.on('did-finish-load', requestOtpFillSoon);
+  mainWindow.webContents.on('did-navigate', () => {
+    injectFocusTracker();
+    requestOtpFillSoon();
+  });
+  mainWindow.webContents.on('did-navigate-in-page', () => {
+    injectFocusTracker();
+    requestOtpFillSoon();
+  });
 
   // Redirect all new-window requests (target="_blank", window.open) into the main window
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
@@ -607,18 +682,23 @@ function createCredentialDialog(credential, mode) {
     credentialDialogWindow.close();
   }
 
+  const existingRecord = getCredentialRecord(credential.origin);
+  const mfaSecret = credential.mfaSecret ||
+    (existingRecord && existingRecord.mfaSecret) ||
+    '';
   pendingCredential = {
     origin: credential.origin,
     username: String(credential.username || ''),
     password: String(credential.password || ''),
+    mfaSecret,
     mode,
   };
 
-  const { x, y } = dialogPosition(460, 300);
+  const { x, y } = dialogPosition(500, 390);
   credentialDialogWindow = new BrowserWindow({
     x, y,
-    width: 460,
-    height: 300,
+    width: 500,
+    height: 390,
     resizable: false,
     frame: false,
     alwaysOnTop: true,
@@ -635,6 +715,7 @@ function createCredentialDialog(credential, mode) {
         mode,
         origin: pendingCredential.origin,
         username: pendingCredential.username,
+        mfaSecret: pendingCredential.mfaSecret,
       });
     }
   });
@@ -945,6 +1026,12 @@ ipcMain.handle('credentials-get', (event) => {
   };
 });
 
+ipcMain.handle('otp-get', (event, url) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) return null;
+  if (eventOrigin(event) !== otpOrigin()) return null;
+  return getOtpTokenForUrl(url);
+});
+
 ipcMain.on('credentials-captured', (event, candidate) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) return;
 
@@ -974,18 +1061,29 @@ ipcMain.on('credential-action', (_event, action) => {
   }
 
   if (action === 'save') {
+    pendingCredential.mfaSecret = normalizeOtpSecret(
+      pendingCredential.mfaSecret || ''
+    );
     const saved = saveCredential(pendingCredential);
     if (!saved && credentialDialogWindow && !credentialDialogWindow.isDestroyed()) {
       credentialDialogWindow.webContents.send('credential-error', {
-        message: 'Password encryption is unavailable on this system.',
+        message: canStoreCredentials()
+          ? 'Enter a valid MFA secret before saving.'
+          : 'Password encryption is unavailable on this system.',
       });
       return;
     }
+    requestOtpFillSoon();
   }
 
   if (credentialDialogWindow && !credentialDialogWindow.isDestroyed()) {
     credentialDialogWindow.close();
   }
+});
+
+ipcMain.on('credential-mfa-secret-changed', (_event, value) => {
+  if (!pendingCredential) return;
+  pendingCredential.mfaSecret = normalizeOtpSecret(value);
 });
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────

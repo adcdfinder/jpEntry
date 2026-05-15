@@ -2,6 +2,8 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+const OTP_LOGIN_URL = 'http://192.168.88.250:8080/core/auth/login/otp/';
+
 contextBridge.exposeInMainWorld('kioskBridge', {
   onIframeDetected: (callback) => ipcRenderer.on('check-iframes', callback),
 });
@@ -22,6 +24,22 @@ function checkIframes() {
 
 function inputType(input) {
   return String(input.getAttribute('type') || 'text').toLowerCase();
+}
+
+function normalizeUrlPath(pathname) {
+  return String(pathname || '').replace(/\/+$/, '') || '/';
+}
+
+function isOtpLoginUrl(value) {
+  try {
+    const url = new URL(value);
+    const target = new URL(OTP_LOGIN_URL);
+    return url.protocol === target.protocol &&
+      url.host === target.host &&
+      normalizeUrlPath(url.pathname) === normalizeUrlPath(target.pathname);
+  } catch (_err) {
+    return false;
+  }
 }
 
 function isCredentialOrigin() {
@@ -178,6 +196,7 @@ function setupCredentialCapture() {
 
 let autofillTimer = null;
 let autofillCredential = null;
+let otpAutofillTimer = null;
 
 function applyCredential(credential) {
   if (!credential || !credential.password) return false;
@@ -213,10 +232,87 @@ function scheduleCredentialAutofill(delay = 250) {
   }, delay);
 }
 
+function otpHintText(input) {
+  return [
+    input.name,
+    input.id,
+    input.className,
+    input.placeholder,
+    input.getAttribute('autocomplete'),
+    input.getAttribute('aria-label'),
+  ].join(' ').toLowerCase();
+}
+
+function isOtpHinted(input) {
+  return /otp|totp|mfa|2fa|two[-_\s]?factor|verification|authenticator|code/.test(
+    otpHintText(input)
+  );
+}
+
+function isSixDigitInput(input) {
+  const maxLength = Number(input.getAttribute('maxlength') || input.maxLength);
+  const inputMode = String(input.getAttribute('inputmode') || input.inputMode || '').toLowerCase();
+  const pattern = String(input.getAttribute('pattern') || '');
+  return maxLength === 6 ||
+    inputMode === 'numeric' ||
+    inputMode === 'decimal' ||
+    /\d|\[0-9\]/.test(pattern);
+}
+
+function isUsableOtpInput(input) {
+  if (!input || input.tagName !== 'INPUT') return false;
+  if (input.disabled || input.readOnly) return false;
+  return [
+    'text',
+    'tel',
+    'number',
+    'password',
+    'search',
+  ].includes(inputType(input));
+}
+
+function findOtpInput(scope = document) {
+  const candidates = Array.from(scope.querySelectorAll('input')).filter(isUsableOtpInput);
+  return candidates.find(isOtpHinted) ||
+    candidates.find(isSixDigitInput) ||
+    null;
+}
+
+function applyOtpToken(token, options = {}) {
+  if (!token || !/^\d{6}$/.test(String(token))) return false;
+
+  const input = findOtpInput();
+  if (!input) return false;
+  if (input.value && !options.force) return false;
+  if (input.value && options.force && !/^\d{0,8}$/.test(String(input.value))) return false;
+
+  setInputValue(input, String(token));
+  input.focus({ preventScroll: true });
+  return true;
+}
+
+function requestOtpAutofill(options = {}) {
+  if (!isOtpLoginUrl(window.location.href)) return;
+
+  ipcRenderer.invoke('otp-get', window.location.href)
+    .then((token) => {
+      applyOtpToken(token, options);
+    })
+    .catch(() => {});
+}
+
+function scheduleOtpAutofill(delay = 250, options = {}) {
+  clearTimeout(otpAutofillTimer);
+  otpAutofillTimer = setTimeout(() => {
+    requestOtpAutofill(options);
+  }, delay);
+}
+
 // Watch for dynamically added iframes and login forms.
 const observer = new MutationObserver(() => {
   checkIframes();
   scheduleCredentialAutofill();
+  scheduleOtpAutofill();
 });
 
 // Allow main process to request a fresh iframe scan (e.g. from nav dialog).
@@ -225,12 +321,21 @@ ipcRenderer.on('force-check-iframes', () => {
   checkIframes();
 });
 
+ipcRenderer.on('otp-fill-now', () => {
+  scheduleOtpAutofill(0, { force: true });
+  setTimeout(() => scheduleOtpAutofill(0, { force: true }), 250);
+  setTimeout(() => scheduleOtpAutofill(0, { force: true }), 750);
+});
+
 window.addEventListener('DOMContentLoaded', () => {
   checkIframes();
   setupCredentialCapture();
   scheduleCredentialAutofill(150);
+  scheduleOtpAutofill(150);
   setTimeout(() => scheduleCredentialAutofill(0), 1000);
   setTimeout(() => scheduleCredentialAutofill(0), 2500);
+  setTimeout(() => scheduleOtpAutofill(0), 1000);
+  setTimeout(() => scheduleOtpAutofill(0), 2500);
 
   if (document.body) {
     observer.observe(document.body, {
