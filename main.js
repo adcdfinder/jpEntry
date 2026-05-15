@@ -20,8 +20,13 @@ app.setAppUserModelId('com.opengeolabs.jpentry');
 
 // Redirect userData to app directory to avoid cache access-denied errors
 // when the default %APPDATA% path is not writable (kiosk user accounts).
+// In packaged apps __dirname is inside app.asar (a file), so we resolve
+// to the directory containing the executable instead.
 if (process.platform === 'win32') {
-  app.setPath('userData', path.join(__dirname, '.electron-data'));
+  const dataDir = app.isPackaged
+    ? path.join(path.dirname(app.getPath('exe')), '.electron-data')
+    : path.join(__dirname, '.electron-data');
+  app.setPath('userData', dataDir);
 }
 
 // ── GPU / rendering optimisation (Windows) ───────────────────────────────────
@@ -134,8 +139,18 @@ function readCredentialStore() {
 
 function writeCredentialStore(store) {
   const filePath = credentialsFilePath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(store, null, 2));
+  const dir = path.dirname(filePath);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (_err) {
+    // Directory creation can fail (e.g. ENOTDIR when a path segment is a file).
+    return;
+  }
+  try {
+    fs.writeFileSync(filePath, JSON.stringify(store, null, 2));
+  } catch (_err) {
+    // Write can fail (e.g. permissions).
+  }
 }
 
 function normalizeOrigin(value) {

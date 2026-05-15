@@ -3,7 +3,7 @@
   "version": "1.0.2",
   "description": "Electron Kiosk Application",
   "author": {
-    "name":"adcdfinder",
+    "name": "adcdfinder",
     "email": "adcdfinder@example.com"
   },
   "main": "main.js",
@@ -41,7 +41,7 @@
           ]
         }
       ],
-      "icon": "icon.ico",
+      "icon": "icon.png",
       "requestedExecutionLevel": "requireAdministrator",
       "signingHashAlgorithms": null,
       "sign": null
