@@ -3,7 +3,6 @@
 const {
   app,
   BrowserWindow,
-  globalShortcut,
   ipcMain,
   session,
   Menu,
@@ -13,14 +12,43 @@ const {
   dialog,
 } = require('electron');
 const path = require('path');
-const fs = require('fs');
 const { authenticator } = require('otplib');
+const {
+  createCredentialStore,
+  normalizeOrigin,
+} = require('./credential-store');
+const {
+  createNavigationHistory,
+  normalizeNavigationUrl,
+} = require('./navigation-history');
+const {
+  partitionForProfile,
+  profileKeyForKiosk,
+} = require('./instance-profile');
 
 const {
-  OTP_LOGIN_URL,
+  DEFAULT_KIOSK_ZONE,
+  KIOSK_ZONES,
+  OTP_LOGIN_PATH,
   normalizeOtpSecret,
+  otpOriginForUrl,
   otpTokenFromSecret,
 } = require('./otp-autofill');
+
+const credentialStore = createCredentialStore({
+  getUserDataPath: () => app.getPath('userData'),
+  safeStorage,
+  normalizeMfaSecret: normalizeOtpSecret,
+  validateMfaSecret: (secret) => Boolean(otpTokenFromSecret(authenticator, secret)),
+});
+const {
+  canStoreCredentials,
+  getCredential,
+  getCredentialRecord,
+  saveCredential,
+  deleteAllCredentials,
+  shouldPromptForCredential,
+} = credentialStore;
 
 // Required for Windows notifications / taskbar grouping
 app.setAppUserModelId('com.opengeolabs.jpentry');
@@ -62,6 +90,9 @@ let rootUrl = null;          // URL entered at startup
 let pendingIframeUrl = null;
 let pendingCredential = null;
 const iframeQueue   = []; // queued iframe srcs waiting for user decision
+const mainNavigationHistory = createNavigationHistory({ limit: 50 });
+let activeProfileKey = 'default';
+let activePartition = partitionForProfile(activeProfileKey);
 
 const PASTE_DEFAULT_CHARS_PER_SECOND = 25;
 const PASTE_MIN_CHARS_PER_SECOND = 5;
@@ -73,19 +104,25 @@ const PASTE_HURRY_BATCH_SIZE = 20;
 const PASTE_HURRY_BATCH_DELAY_MS = 16;
 
 // ── Session setup ─────────────────────────────────────────────────────────────
-// Called once, before any window is created
-function setupSession() {
-  const ses = session.fromPartition('persist:kiosk');
+// Called when a kiosk profile is selected. Each profile gets its own
+// persistent Chromium partition so red/yellow instances can run side by side.
+const kioskSessions = new Map();
+function setupSession(partition = activePartition) {
+  if (kioskSessions.has(partition)) {
+    return kioskSessions.get(partition);
+  }
+
+  const ses = session.fromPartition(partition);
 
   // Allow all cookies (including HTTP, local IPs, non-standard ports)
   ses.webRequest.onHeadersReceived((details, callback) => {
     callback({ responseHeaders: details.responseHeaders });
   });
 
+  kioskSessions.set(partition, ses);
   return ses;
 }
 
-let kioskSession = null;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -128,196 +165,97 @@ function dialogBounds(preferredWidth, preferredHeight, minWidth, minHeight) {
   };
 }
 
-function credentialsFilePath() {
-  return path.join(app.getPath('userData'), 'credentials.json');
+function loadMainUrl(url) {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+
+  const normalizedUrl = normalizeNavigationUrl(url);
+  if (!normalizedUrl) return false;
+
+  mainWindow.loadURL(normalizedUrl).catch(() => {});
+  return true;
 }
 
-function readCredentialStore() {
-  try {
-    const raw = fs.readFileSync(credentialsFilePath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    if (parsed && parsed.version === 1 && parsed.credentials) {
-      return parsed;
+function loadPreviousRecordedMainPage(currentUrl) {
+  const previousUrl = mainNavigationHistory.previous(currentUrl);
+  if (!previousUrl) return false;
+
+  return loadMainUrl(previousUrl);
+}
+
+function goToPreviousMainPage() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+
+  const currentUrl = normalizeNavigationUrl(mainWindow.webContents.getURL());
+  if (mainWindow.webContents.canGoBack()) {
+    mainWindow.webContents.goBack();
+    setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      const nextUrl = normalizeNavigationUrl(mainWindow.webContents.getURL());
+      if (nextUrl === currentUrl) {
+        loadPreviousRecordedMainPage(currentUrl);
+      }
+    }, 600);
+    return true;
+  }
+
+  return loadPreviousRecordedMainPage(currentUrl);
+}
+
+function isShortcutKey(input, key, options = {}) {
+  if (!input || input.type !== 'keyDown') return false;
+  return Boolean(
+    input.control &&
+    input.alt &&
+    !input.meta &&
+    Boolean(input.shift) === Boolean(options.shift) &&
+    String(input.key || '').toLowerCase() === key
+  );
+}
+
+function handleWindowScopedShortcut(input) {
+  if (isShortcutKey(input, 'h')) {
+    if (!pasteLocked && mainWindow) createNavDialog();
+    return true;
+  }
+
+  if (isShortcutKey(input, 'v')) {
+    openClipboardPasteDialog();
+    return true;
+  }
+
+  if (isShortcutKey(input, 'q', { shift: true })) {
+    if (pasteLocked) {
+      cancelActivePasteOperation();
+    } else {
+      app.quit();
     }
-  } catch (_err) {}
+    return true;
+  }
 
-  return { version: 1, credentials: {} };
+  return false;
 }
 
-function writeCredentialStore(store) {
-  const filePath = credentialsFilePath();
-  const dir = path.dirname(filePath);
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-  } catch (_err) {
-    // Directory creation can fail (e.g. ENOTDIR when a path segment is a file).
-    return;
-  }
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(store, null, 2));
-  } catch (_err) {
-    // Write can fail (e.g. permissions).
-  }
-}
+function attachWindowScopedShortcuts(browserWindow) {
+  if (!browserWindow || browserWindow.isDestroyed()) return;
 
-function normalizeOrigin(value) {
-  try {
-    const origin = new URL(value).origin;
-    if (origin === 'null') return null;
-    return origin;
-  } catch (_err) {
-    return null;
-  }
+  browserWindow.webContents.on('before-input-event', (event, input) => {
+    if (!handleWindowScopedShortcut(input)) return;
+    event.preventDefault();
+  });
 }
 
 function eventOrigin(event) {
   return normalizeOrigin(event.senderFrame && event.senderFrame.url);
 }
 
-function currentMainOrigin() {
-  if (!mainWindow || mainWindow.isDestroyed()) return null;
-  return normalizeOrigin(mainWindow.webContents.getURL());
-}
+function getOtpTokenForUrl(url, options = {}) {
+  const otpOrigin = otpOriginForUrl(url, options);
+  if (!otpOrigin) return null;
 
-function canStoreCredentials() {
-  try {
-    return safeStorage.isEncryptionAvailable();
-  } catch (_err) {
-    return false;
-  }
-}
-
-function encryptPassword(password) {
-  if (!canStoreCredentials()) return null;
-  return safeStorage.encryptString(String(password || '')).toString('base64');
-}
-
-function decryptPassword(encryptedPassword) {
-  if (!encryptedPassword || !canStoreCredentials()) return null;
-
-  try {
-    return safeStorage.decryptString(Buffer.from(encryptedPassword, 'base64'));
-  } catch (_err) {
-    return null;
-  }
-}
-
-function getCredential(origin) {
-  const normalizedOrigin = normalizeOrigin(origin);
-  if (!normalizedOrigin) return null;
-
-  const store = readCredentialStore();
-  const record = store.credentials[normalizedOrigin];
-  if (!record) return null;
-
-  const password = decryptPassword(record.password);
-  if (password == null) return null;
-
-  return {
-    origin: normalizedOrigin,
-    username: record.username || '',
-    password,
-    mfaSecret: record.mfaSecret || '',
-    updatedAt: record.updatedAt || null,
-  };
-}
-
-function getCredentialRecord(origin) {
-  const normalizedOrigin = normalizeOrigin(origin);
-  if (!normalizedOrigin) return null;
-
-  const store = readCredentialStore();
-  return store.credentials[normalizedOrigin] || null;
-}
-
-function isValidMfaSecret(secret) {
-  return Boolean(otpTokenFromSecret(authenticator, secret));
-}
-
-function saveCredential(credential) {
-  const origin = normalizeOrigin(credential && credential.origin);
-  const password = credential && credential.password;
-  if (!origin || !password) return false;
-
-  const mfaSecret = normalizeOtpSecret((credential && credential.mfaSecret) || '');
-  if (!mfaSecret || !isValidMfaSecret(mfaSecret)) return false;
-
-  const encryptedPassword = encryptPassword(password);
-  if (!encryptedPassword) return false;
-
-  const store = readCredentialStore();
-  const existing = store.credentials[origin];
-  const now = new Date().toISOString();
-  store.credentials[origin] = {
-    username: String((credential && credential.username) || ''),
-    password: encryptedPassword,
-    mfaSecret,
-    createdAt: existing && existing.createdAt ? existing.createdAt : now,
-    updatedAt: now,
-  };
-  writeCredentialStore(store);
-  return true;
-}
-
-function deleteCredential(origin) {
-  const normalizedOrigin = normalizeOrigin(origin);
-  if (!normalizedOrigin) return false;
-
-  const store = readCredentialStore();
-  if (!store.credentials[normalizedOrigin]) return false;
-
-  delete store.credentials[normalizedOrigin];
-  writeCredentialStore(store);
-  return true;
-}
-
-function deleteAllCredentials() {
-  writeCredentialStore({ version: 1, credentials: {} });
-}
-
-function shouldPromptForCredential(candidate) {
-  if (!candidate || !candidate.origin || !candidate.password) return null;
-  if (!canStoreCredentials()) return null;
-
-  const existing = getCredential(candidate.origin);
-  if (!existing) return 'save';
-  if (!existing.mfaSecret) return 'mfa';
-
-  if (
-    existing.username === String(candidate.username || '') &&
-    existing.password === String(candidate.password || '')
-  ) {
-    return null;
-  }
-
-  return 'update';
-}
-
-function otpOrigin() {
-  return normalizeOrigin(OTP_LOGIN_URL);
-}
-
-function getOtpTokenForUrl(url) {
-  if (!url || normalizeUrlWithoutSearch(url) !== normalizeUrlWithoutSearch(OTP_LOGIN_URL)) {
-    return null;
-  }
-
-  const credential = getCredential(otpOrigin());
+  const credential = getCredential(otpOrigin);
   if (!credential || !credential.mfaSecret) return null;
 
   return otpTokenFromSecret(authenticator, credential.mfaSecret);
-}
-
-function normalizeUrlWithoutSearch(value) {
-  try {
-    const url = new URL(value);
-    url.search = '';
-    url.hash = '';
-    url.pathname = String(url.pathname || '/').replace(/\/+$/, '') || '/';
-    return url.toString();
-  } catch (_err) {
-    return null;
-  }
 }
 
 function pasteCharacters(text) {
@@ -408,21 +346,11 @@ function beginPasteInputLock() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setIgnoreMouseEvents(true);
   }
-
-  if (!globalShortcut.isRegistered('Esc')) {
-    globalShortcut.register('Esc', () => {
-      cancelActivePasteOperation();
-    });
-  }
 }
 
 function endPasteInputLock() {
   pasteLocked = false;
   setPasteDialogInputLocked(false);
-
-  if (globalShortcut.isRegistered('Esc')) {
-    globalShortcut.unregister('Esc');
-  }
 
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setIgnoreMouseEvents(false);
@@ -506,7 +434,7 @@ function requestOtpFillSoon() {
 function createUrlDialog() {
   urlDialogWindow = new BrowserWindow({
     width: 520,
-    height: 310,
+    height: 380,
     resizable: false,
     frame: false,
     alwaysOnTop: true,
@@ -516,12 +444,29 @@ function createUrlDialog() {
       contextIsolation: false,
     },
   });
+  attachWindowScopedShortcuts(urlDialogWindow);
   urlDialogWindow.loadFile(path.join(__dirname, 'url-dialog.html'));
+  urlDialogWindow.webContents.on('did-finish-load', () => {
+    if (urlDialogWindow && !urlDialogWindow.isDestroyed()) {
+      urlDialogWindow.webContents.send('kiosk-zones', {
+        zones: KIOSK_ZONES,
+        defaultZone: DEFAULT_KIOSK_ZONE,
+      });
+    }
+  });
   urlDialogWindow.on('closed', () => { urlDialogWindow = null; });
 }
 
-function createMainWindow(url, targetDisplay, fullscreen = true) {
+function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
   rootUrl = url;
+  mainNavigationHistory.reset(url);
+  activeProfileKey = profileKeyForKiosk(url, {
+    zones: KIOSK_ZONES,
+    zoneKey,
+    defaultKey: DEFAULT_KIOSK_ZONE,
+  });
+  activePartition = partitionForProfile(activeProfileKey);
+  setupSession(activePartition);
 
   const { x, y } = targetDisplay ? targetDisplay.bounds : { x: 0, y: 0 };
 
@@ -535,13 +480,18 @@ function createMainWindow(url, targetDisplay, fullscreen = true) {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
-      partition: 'persist:kiosk',   // use named partition directly
+      partition: activePartition,
     },
   });
 
-  mainWindow.loadURL(url);
+  loadMainUrl(url);
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (handleWindowScopedShortcut(input)) {
+      event.preventDefault();
+      return;
+    }
+
     if (!pasteLocked) return;
 
     if (input.key === 'Escape') {
@@ -594,18 +544,22 @@ function createMainWindow(url, targetDisplay, fullscreen = true) {
   }
   mainWindow.webContents.on('did-finish-load', injectFocusTracker);
   mainWindow.webContents.on('did-finish-load', requestOtpFillSoon);
-  mainWindow.webContents.on('did-navigate', () => {
+  mainWindow.webContents.on('did-navigate', (_event, navigatedUrl) => {
+    mainNavigationHistory.record(navigatedUrl);
     injectFocusTracker();
     requestOtpFillSoon();
   });
-  mainWindow.webContents.on('did-navigate-in-page', () => {
+  mainWindow.webContents.on('did-navigate-in-page', (_event, navigatedUrl, isMainFrame) => {
+    if (isMainFrame !== false) {
+      mainNavigationHistory.record(navigatedUrl);
+    }
     injectFocusTracker();
     requestOtpFillSoon();
   });
 
   // Redirect all new-window requests (target="_blank", window.open) into the main window
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    mainWindow.loadURL(targetUrl);
+    loadMainUrl(targetUrl);
     return { action: 'deny' }; // block the new window
   });
 
@@ -635,6 +589,7 @@ function createNavDialog() {
       contextIsolation: false,
     },
   });
+  attachWindowScopedShortcuts(navDialogWindow);
   navDialogWindow.loadFile(path.join(__dirname, 'nav-dialog.html'));
   navDialogWindow.on('closed', () => { navDialogWindow = null; });
 }
@@ -657,6 +612,7 @@ function createPasteDialog(initialText = '', source = 'manual') {
       contextIsolation: false,
     },
   });
+  attachWindowScopedShortcuts(pasteDialogWindow);
   pasteDialogWindow.loadFile(path.join(__dirname, 'paste-dialog.html'));
   pasteDialogWindow.webContents.on('did-finish-load', () => {
     if (pasteDialogWindow && !pasteDialogWindow.isDestroyed()) {
@@ -708,6 +664,7 @@ function createCredentialDialog(credential, mode) {
       contextIsolation: false,
     },
   });
+  attachWindowScopedShortcuts(credentialDialogWindow);
   credentialDialogWindow.loadFile(path.join(__dirname, 'credential-dialog.html'));
   credentialDialogWindow.webContents.on('did-finish-load', () => {
     if (credentialDialogWindow && !credentialDialogWindow.isDestroyed()) {
@@ -751,6 +708,7 @@ function createIframeDialog(iframeUrl) {
       contextIsolation: false,
     },
   });
+  attachWindowScopedShortcuts(iframeDialogWindow);
   iframeDialogWindow.loadFile(
     path.join(__dirname, 'iframe-dialog.html')
   );
@@ -768,27 +726,8 @@ function createIframeDialog(iframeUrl) {
 }
 
 // ── Global shortcuts ─────────────────────────────────────────────────────────
-function registerShortcuts() {
-  // Show nav popup  (Ctrl+Alt+H)
-  globalShortcut.register('Ctrl+Alt+H', () => {
-    if (pasteLocked) return;
-    if (mainWindow) createNavDialog();
-  });
-
-  // Paste clipboard text into the focused bastion/terminal field (Ctrl+Alt+V)
-  globalShortcut.register('Ctrl+Alt+V', () => {
-    openClipboardPasteDialog();
-  });
-
-  // Quit immediately  (Ctrl+Alt+Shift+Q)
-  globalShortcut.register('Ctrl+Alt+Shift+Q', () => {
-    if (pasteLocked) {
-      cancelActivePasteOperation();
-      return;
-    }
-    app.quit();
-  });
-}
+// Window-scoped shortcuts are handled with before-input-event so multiple
+// app instances can use the same key bindings without OS-level conflicts.
 
 // ── IPC handlers ─────────────────────────────────────────────────────────────
 
@@ -805,7 +744,8 @@ ipcMain.on('url-submitted', (_event, payload) => {
   }
   const url = typeof payload === 'string' ? payload : payload.url;
   const fullscreen = typeof payload === 'string' ? true : Boolean(payload.fullscreen);
-  createMainWindow(url, targetDisplay, fullscreen);
+  const zoneKey = typeof payload === 'string' ? '' : payload.zone;
+  createMainWindow(url, targetDisplay, fullscreen, zoneKey);
 });
 
 // Navigation popup actions
@@ -854,12 +794,10 @@ ipcMain.on('nav-action', (_event, action) => {
     return;
   }
 
-  if (action === 'root' && rootUrl) {
-    mainWindow.loadURL(rootUrl);
+  if (action === 'root') {
+    loadMainUrl(rootUrl);
   } else if (action === 'back') {
-    if (mainWindow.webContents.canGoBack()) {
-      mainWindow.webContents.goBack();
-    }
+    goToPreviousMainPage();
   }
   // 'cancel' — do nothing
 });
@@ -875,7 +813,7 @@ ipcMain.on('iframe-action', (_event, action) => {
   if (iframeDialogWindow) iframeDialogWindow.close();
 
   if (action === 'navigate' && url && mainWindow) {
-    mainWindow.loadURL(url);
+    loadMainUrl(url);
   }
 });
 
@@ -1012,6 +950,12 @@ ipcMain.handle('paste-estimate', (_event, payload) => {
   );
 });
 
+ipcMain.handle('kiosk-config', () => ({
+  zones: KIOSK_ZONES,
+  defaultZone: DEFAULT_KIOSK_ZONE,
+  otpLoginPath: OTP_LOGIN_PATH,
+}));
+
 ipcMain.handle('credentials-get', (event) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) return null;
 
@@ -1026,10 +970,15 @@ ipcMain.handle('credentials-get', (event) => {
   };
 });
 
-ipcMain.handle('otp-get', (event, url) => {
+ipcMain.handle('otp-get', (event, payload) => {
   if (!mainWindow || event.sender !== mainWindow.webContents) return null;
-  if (eventOrigin(event) !== otpOrigin()) return null;
-  return getOtpTokenForUrl(url);
+  const url = typeof payload === 'string' ? payload : payload && payload.url;
+  const hasOtpInput = Boolean(
+    payload && typeof payload === 'object' && payload.hasOtpInput
+  );
+  const otpOrigin = otpOriginForUrl(url, { hasOtpInput });
+  if (!otpOrigin || eventOrigin(event) !== otpOrigin) return null;
+  return getOtpTokenForUrl(url, { hasOtpInput });
 });
 
 ipcMain.on('credentials-captured', (event, candidate) => {
@@ -1088,22 +1037,16 @@ ipcMain.on('credential-mfa-secret-changed', (_event, value) => {
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
-  kioskSession = setupSession();
   Menu.setApplicationMenu(null); // remove File/Edit/View menu bar from all windows
-  registerShortcuts();
   createUrlDialog();
 });
 
 app.on('before-quit', async () => {
   // Flush the kiosk session's cookie store so login state survives restarts.
   // Electron/Chromium buffers cookie writes; without this they can be lost on exit.
-  if (kioskSession) {
-    await kioskSession.cookies.flushStore().catch(() => {});
+  for (const ses of kioskSessions.values()) {
+    await ses.cookies.flushStore().catch(() => {});
   }
-});
-
-app.on('will-quit', () => {
-  globalShortcut.unregisterAll();
 });
 
 app.on('window-all-closed', () => {

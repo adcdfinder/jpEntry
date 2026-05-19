@@ -27,6 +27,9 @@
     "files": [
       "main.js",
       "preload.js",
+      "credential-store.js",
+      "instance-profile.js",
+      "navigation-history.js",
       "otp-autofill.js",
       "*.html",
       "icon.ico"

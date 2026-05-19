@@ -2,7 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  defaultKioskUrl,
   isOtpLoginUrl,
+  otpOriginForUrl,
   findOtpInput,
   otpTokenFromSecret,
   normalizeOtpSecret,
@@ -19,12 +21,49 @@ test('matches the configured OTP login page only', () => {
     true
   );
   assert.equal(
+    isOtpLoginUrl('http://192.168.20.250:80/core/auth/login/otp/'),
+    true
+  );
+  assert.equal(
+    isOtpLoginUrl('http://192.168.20.250/core/auth/login/otp/'),
+    true
+  );
+  assert.equal(
+    isOtpLoginUrl('http://192.168.20.250/core/auth/login/?next=/ui/#/mfa'),
+    true
+  );
+  assert.equal(
+    isOtpLoginUrl('http://192.168.20.250/ui/#/login/otp'),
+    true
+  );
+  assert.equal(
     isOtpLoginUrl('http://192.168.88.250:8080/core/auth/login/password/'),
     false
   );
   assert.equal(
     isOtpLoginUrl('https://192.168.88.250:8080/core/auth/login/otp/'),
     false
+  );
+});
+
+test('normalizes OTP origins per kiosk zone', () => {
+  assert.equal(defaultKioskUrl('red'), 'http://192.168.88.250:8080');
+  assert.equal(defaultKioskUrl('yellow'), 'http://192.168.20.250:80');
+  assert.equal(
+    otpOriginForUrl('http://192.168.20.250:80/core/auth/login/otp/'),
+    'http://192.168.20.250'
+  );
+  assert.equal(
+    otpOriginForUrl('http://192.168.88.250:8080/core/auth/login/otp/'),
+    'http://192.168.88.250:8080'
+  );
+  assert.equal(
+    otpOriginForUrl('http://192.168.20.250/core/auth/login/', { hasOtpInput: true }),
+    'http://192.168.20.250'
+  );
+  assert.equal(
+    otpOriginForUrl('http://example.com/core/auth/login/', { hasOtpInput: true }),
+    null
   );
 });
 
@@ -42,6 +81,15 @@ test('falls back to a six digit numeric text input', () => {
   const inputs = [
     { type: 'text', name: 'username', value: 'admin' },
     { type: 'text', maxlength: '6', inputmode: 'numeric' },
+  ];
+
+  assert.equal(findOtpInput(inputs), inputs[1]);
+});
+
+test('finds Chinese MFA code input hints', () => {
+  const inputs = [
+    { type: 'text', name: 'username', placeholder: '用户名' },
+    { type: 'text', name: 'captcha', placeholder: '请输入 MFA 验证码' },
   ];
 
   assert.equal(findOtpInput(inputs), inputs[1]);

@@ -4,3 +4,4 @@ dist/
 .electron-data/
 .npm-cache/
 .electron-cache/
+.sensitive-export/
