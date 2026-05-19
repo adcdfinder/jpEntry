@@ -40,7 +40,6 @@
       padding-bottom: 14px;
       border-bottom: 1px solid #F0F1F2;
     }
-    .title-icon { font-size: 1.2rem; line-height: 1; }
     .title-text {
       font-size: 1rem;
       font-weight: 700;
@@ -73,7 +72,6 @@
       color: #5C6773;
     }
     button:active { transform: scale(0.97); }
-    .btn-icon { font-size: 1rem; width: 20px; text-align: center; flex-shrink: 0; }
 
     #rootBtn  { background: #399EE6; color: #FFFFFF; }
     #rootBtn:hover  { background: #55AAEE; }
@@ -83,6 +81,9 @@
 
     #pasteBtn { background: #F5F6F7; }
     #pasteBtn:hover { background: #EAEBEC; }
+
+    #iframeBtn { background: #F5F6F7; }
+    #iframeBtn:hover { background: #EAEBEC; }
 
     #clearAllCredentialsBtn {
       background: #F5F6F7;
@@ -118,46 +119,40 @@
 <body>
   <div class="card">
     <div class="title">
-      <span class="title-icon">🖥</span>
       <span class="title-text">Kiosk Navigation</span>
     </div>
     <div class="nav-group">
-      <button id="rootBtn">
-        <span class="btn-icon">🏠</span>Go to Root Page
-      </button>
-      <button id="backBtn">
-        <span class="btn-icon">⬅</span>Go to Last Page
-      </button>
-      <button id="pasteBtn">
-        <span class="btn-icon">📋</span>Paste Text
-      </button>
-      <button id="iframeBtn">
-        <span class="btn-icon">🔍</span>Detect Iframes
-      </button>
+      <button id="rootBtn">Go to Root Page</button>
+      <button id="backBtn">Go to Last Page</button>
+      <button id="pasteBtn">Paste Text</button>
+      <button id="iframeBtn">Detect Iframes</button>
     </div>
     <hr class="divider" />
     <div class="nav-group">
-      <button id="clearAllCredentialsBtn">
-        Clear All Passwords
-      </button>
+      <button id="clearAllCredentialsBtn">Clear All Passwords</button>
     </div>
     <hr class="divider" />
     <div class="nav-group">
-      <button id="quitBtn">
-        <span class="btn-icon">⏻</span>Close Application
-      </button>
+      <button id="quitBtn">Close Application</button>
     </div>
     <button id="cancelBtn">Cancel</button>
   </div>
   <script>
     const { ipcRenderer } = require('electron');
-    document.getElementById('rootBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'root'));
-    document.getElementById('backBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'back'));
-    document.getElementById('pasteBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'paste'));
-    document.getElementById('quitBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'quit'));
-    document.getElementById('iframeBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'check-iframes'));
-    document.getElementById('clearAllCredentialsBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'clear-all-credentials'));
-    document.getElementById('cancelBtn').addEventListener('click', () => ipcRenderer.send('nav-action', 'cancel'));
+
+    function bindAction(id, action) {
+      const element = document.getElementById(id);
+      if (!element) return;
+      element.addEventListener('click', () => ipcRenderer.send('nav-action', action));
+    }
+
+    bindAction('rootBtn', 'root');
+    bindAction('backBtn', 'back');
+    bindAction('pasteBtn', 'paste');
+    bindAction('iframeBtn', 'check-iframes');
+    bindAction('clearAllCredentialsBtn', 'clear-all-credentials');
+    bindAction('quitBtn', 'quit');
+    bindAction('cancelBtn', 'cancel');
   </script>
 </body>
 </html>

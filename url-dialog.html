@@ -32,7 +32,7 @@
       color: #5C6773;
       -webkit-app-region: drag;
     }
-    input, button, #error {
+    input, button, #error, .zone-toggle {
       -webkit-app-region: no-drag;
     }
     .drag-handle {
@@ -66,6 +66,32 @@
     input:focus {
       border-color: #399EE6;
       background: #FFFFFF;
+    }
+    .zone-toggle {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .zone-toggle button {
+      margin-top: 0;
+      padding: 9px 10px;
+      border-radius: 10px;
+      border: 1.5px solid #E0E1E2;
+      background: #F8F9FA;
+      color: #687480;
+      font-size: 0.88rem;
+      font-weight: 700;
+    }
+    .zone-toggle button.active {
+      color: #FFFFFF;
+      border-color: transparent;
+    }
+    .zone-toggle button.zone-red.active {
+      background: #D75A4A;
+    }
+    .zone-toggle button.zone-yellow.active {
+      background: #D3A420;
     }
     button {
       margin-top: 14px;
@@ -112,32 +138,69 @@
 </head>
 <body>
   <div class="card">
-    <div class="drag-handle">⠿ ⠿ ⠿</div>
-    <h2>🖥 Enter Kiosk URL</h2>
-    <input type="text" id="urlInput" placeholder="https://example.com" value="http://192.168.88.250:8080" autofocus />
+    <div class="drag-handle">...</div>
+    <h2>Enter Kiosk URL</h2>
+    <div id="zoneToggle" class="zone-toggle"></div>
+    <input type="text" id="urlInput" placeholder="https://example.com" autofocus />
     <div id="error"></div>
     <div class="checkbox-row">
       <input type="checkbox" id="fullscreenCheck" checked />
       <label for="fullscreenCheck">Enter full screen mode</label>
     </div>
-    <button id="okBtn">OK — Enter Kiosk Mode</button>
+    <button id="okBtn">OK - Enter Kiosk Mode</button>
   </div>
   <script>
     const { ipcRenderer } = require('electron');
+    const urlInput = document.getElementById('urlInput');
+    const zoneToggle = document.getElementById('zoneToggle');
+    let kioskZones = [];
+    let selectedZone = '';
+
+    function selectZone(zoneKey) {
+      const zone = kioskZones.find((item) => item.key === zoneKey);
+      if (!zone) return;
+
+      selectedZone = zone.key;
+      urlInput.value = zone.url;
+      Array.from(zoneToggle.querySelectorAll('button')).forEach((button) => {
+        button.classList.toggle('active', button.dataset.zone === zone.key);
+      });
+      urlInput.focus();
+      urlInput.select();
+    }
+
+    function renderZones(payload) {
+      kioskZones = Array.isArray(payload && payload.zones) ? payload.zones : [];
+      selectedZone = payload && payload.defaultZone ? payload.defaultZone : '';
+      zoneToggle.innerHTML = '';
+
+      kioskZones.forEach((zone) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.zone = zone.key;
+        button.className = 'zone-' + zone.key;
+        button.textContent = zone.label;
+        button.addEventListener('click', () => selectZone(zone.key));
+        zoneToggle.appendChild(button);
+      });
+
+      selectZone(selectedZone || (kioskZones[0] && kioskZones[0].key));
+    }
 
     function submit() {
-      const raw = document.getElementById('urlInput').value.trim();
+      const raw = urlInput.value.trim();
       const err = document.getElementById('error');
       if (!raw) { err.textContent = 'Please enter a URL.'; return; }
       let url = raw;
       if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
       err.textContent = '';
       const fullscreen = document.getElementById('fullscreenCheck').checked;
-      ipcRenderer.send('url-submitted', { url, fullscreen });
+      ipcRenderer.send('url-submitted', { url, fullscreen, zone: selectedZone });
     }
 
+    ipcRenderer.on('kiosk-zones', (_event, payload) => renderZones(payload));
     document.getElementById('okBtn').addEventListener('click', submit);
-    document.getElementById('urlInput').addEventListener('keydown', e => {
+    urlInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') submit();
     });
   </script>

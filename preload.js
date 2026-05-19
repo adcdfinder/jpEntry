@@ -2,11 +2,13 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const OTP_LOGIN_URL = 'http://192.168.88.250:8080/core/auth/login/otp/';
-
 contextBridge.exposeInMainWorld('kioskBridge', {
   onIframeDetected: (callback) => ipcRenderer.on('check-iframes', callback),
 });
+
+let kioskOrigins = [];
+let otpLoginPath = '';
+let kioskConfigPromise = null;
 
 // Observe DOM for iframe insertions and report their src to main.
 const reportedSrcs = new Set();
@@ -30,16 +32,67 @@ function normalizeUrlPath(pathname) {
   return String(pathname || '').replace(/\/+$/, '') || '/';
 }
 
+function normalizeOrigin(value) {
+  try {
+    const origin = new URL(value).origin;
+    return origin === 'null' ? null : origin;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function applyKioskConfig(config) {
+  const zones = Array.isArray(config && config.zones) ? config.zones : [];
+  kioskOrigins = zones
+    .map((zone) => normalizeOrigin(zone.url))
+    .filter(Boolean);
+  otpLoginPath = String((config && config.otpLoginPath) || '');
+}
+
+function loadKioskConfig() {
+  if (!kioskConfigPromise) {
+    kioskConfigPromise = ipcRenderer.invoke('kiosk-config')
+      .then((config) => {
+        applyKioskConfig(config);
+        return config;
+      })
+      .catch(() => null);
+  }
+  return kioskConfigPromise;
+}
+
 function isOtpLoginUrl(value) {
   try {
     const url = new URL(value);
-    const target = new URL(OTP_LOGIN_URL);
-    return url.protocol === target.protocol &&
-      url.host === target.host &&
-      normalizeUrlPath(url.pathname) === normalizeUrlPath(target.pathname);
+    return Boolean(
+      otpLoginPath &&
+      kioskOrigins.includes(url.origin) &&
+      (
+        normalizeUrlPath(url.pathname) === normalizeUrlPath(otpLoginPath) ||
+        hasOtpUrlHint(url)
+      )
+    );
   } catch (_err) {
     return false;
   }
+}
+
+function isKnownKioskUrl(value) {
+  try {
+    const url = new URL(value);
+    return kioskOrigins.includes(url.origin);
+  } catch (_err) {
+    return false;
+  }
+}
+
+function hasOtpUrlHint(url) {
+  const haystack = decodeURIComponent([
+    url.pathname,
+    url.search,
+    url.hash,
+  ].join(' ')).toLowerCase();
+  return /otp|totp|mfa|2fa|two[-_\s]?factor|verification/.test(haystack);
 }
 
 function isCredentialOrigin() {
@@ -244,7 +297,7 @@ function otpHintText(input) {
 }
 
 function isOtpHinted(input) {
-  return /otp|totp|mfa|2fa|two[-_\s]?factor|verification|authenticator|code/.test(
+  return /otp|totp|mfa|2fa|two[-_\s]?factor|verification|authenticator|code|验证码|动态码|认证码|安全码|令牌|口令|多因素|双因素/.test(
     otpHintText(input)
   );
 }
@@ -292,11 +345,18 @@ function applyOtpToken(token, options = {}) {
 }
 
 function requestOtpAutofill(options = {}) {
-  if (!isOtpLoginUrl(window.location.href)) return;
-
-  ipcRenderer.invoke('otp-get', window.location.href)
+  loadKioskConfig()
+    .then(() => {
+      const hasOtpInput = Boolean(findOtpInput());
+      if (!isOtpLoginUrl(window.location.href) && !hasOtpInput) return null;
+      if (!isKnownKioskUrl(window.location.href)) return null;
+      return ipcRenderer.invoke('otp-get', {
+        url: window.location.href,
+        hasOtpInput,
+      });
+    })
     .then((token) => {
-      applyOtpToken(token, options);
+      if (token) applyOtpToken(token, options);
     })
     .catch(() => {});
 }
@@ -329,6 +389,7 @@ ipcRenderer.on('otp-fill-now', () => {
 
 window.addEventListener('DOMContentLoaded', () => {
   checkIframes();
+  loadKioskConfig().then(() => scheduleOtpAutofill(0));
   setupCredentialCapture();
   scheduleCredentialAutofill(150);
   scheduleOtpAutofill(150);

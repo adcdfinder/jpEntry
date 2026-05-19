@@ -10,11 +10,13 @@ As you can see, the application is all generated with AI. The initial requiremen
 
 | Feature | Detail |
 |---|---|
-| **Startup URL dialog** | Popup on launch to enter the target URL (default: `http://192.168.88.250:8080`) |
+| **Startup URL dialog** | Popup on launch to choose Red Zone (`http://192.168.88.250:8080`) or Yellow Zone (`http://192.168.20.250:80`) |
 | **Kiosk mode** | Full-screen, no browser chrome, no taskbar access after URL is confirmed |
 | **Navigation popup** | `Ctrl+Alt+H` reveals operator controls |
 | **Paste dialog** | `Ctrl+Alt+V` opens a confirmation dialog for paced simulated typing into the focused input/terminal |
+| **Multi-instance support** | Red Zone and Yellow Zone windows can run at the same time with separate browser sessions and focus-scoped shortcuts |
 | **Password saving** | Detects submitted login forms, asks before saving, encrypts saved passwords locally, and autofills the same site later |
+| **MFA OTP autofill** | Autofills saved MFA tokens on Red Zone and Yellow Zone OTP login pages |
 | **New-window redirect** | All `target="_blank"` links and `window.open()` calls load inside the main window |
 | **iframe detection** | When a page embeds an iframe, a popup asks whether to navigate to the iframe URL in the main window |
 | **No menu bar** | File / Edit / View menu is removed from all windows |
@@ -28,6 +30,10 @@ As you can see, the application is all generated with AI. The initial requiremen
 |---|---|
 | `Ctrl+Alt+H` | Open navigation popup |
 | `Ctrl+Alt+V` | Open clipboard paste confirmation |
+
+Shortcuts are window-scoped rather than OS-global. When multiple JP Entry
+instances are open, the focused/fullscreen instance receives the shortcut and
+other instances are left alone.
 
 ### Navigation Popup Options
 
@@ -56,6 +62,10 @@ Open via `Ctrl+Alt+V` or the **Paste Text** button in the navigation popup:
 jpEntry/
 ├── main.js              # Main process — windows, shortcuts, session, IPC
 ├── preload.js           # Renderer bridge — iframe detection via MutationObserver
+├── credential-store.js  # Testable password storage and prompt decisions
+├── instance-profile.js  # Red / Yellow profile partition selection
+├── navigation-history.js # Testable Root / Last Page navigation history
+├── otp-autofill.js      # Testable OTP URL matching and input detection
 ├── package.json         # Dependencies and electron-builder config
 ├── generate-icon.js     # Utility: regenerate icon.ico (pure Node.js, no deps)
 ├── icon.ico             # App icon (16 / 32 / 48 / 256 px)
@@ -81,6 +91,17 @@ npm install
 npm start
 ```
 
+### Run tests
+
+```bat
+npm test
+```
+
+The test suite covers the non-paste runtime contracts that are easiest to break
+by accident: Red / Yellow zone OTP matching, saved-password storage decisions,
+Root / Last Page navigation history fallback, dialog button wiring, and the
+electron-builder file list for local runtime modules.
+
 ### Build for Windows
 
 ```bat
@@ -96,7 +117,7 @@ Output in `dist\`:
 | `JP Entry Setup 1.0.0.exe` | NSIS installer (installs to Program Files, creates shortcuts) |
 | `JPEntry-portable.exe` | Portable single-file executable — recommended for kiosk machines |
 
-> **Note:** The app requests administrator rights (`requireAdministrator`) so that global shortcuts and kiosk mode work reliably on Windows.
+> **Note:** The app requests administrator rights (`requireAdministrator`) so kiosk mode works reliably on Windows.
 
 #### Offline build (no internet access)
 
@@ -116,10 +137,10 @@ If `electron-builder` cannot download its binaries automatically:
 
 - Creates the **URL dialog** window on startup (non-kiosk, always-on-top)
 - After URL is submitted via IPC, creates the **main kiosk window** (`kiosk: true`, `fullscreen: true`)
-- Registers global shortcuts (`Ctrl+Alt+H`, `Ctrl+Alt+V`, `Ctrl+Alt+Shift+Q`)
+- Handles window-scoped shortcuts (`Ctrl+Alt+H`, `Ctrl+Alt+V`, `Ctrl+Alt+Shift+Q`) on the focused instance
 - Handles `setWindowOpenHandler` to redirect all new-window requests into the main window
 - Manages an **iframe queue** — when multiple iframes are detected simultaneously, dialogs are shown sequentially
-- Session uses `partition: 'persist:kiosk'` — data stored in `%APPDATA%\jp-entry\Partitions\persist_kiosk\`
+- Red and Yellow sessions use separate persistent partitions (`persist:kiosk-red` and `persist:kiosk-yellow`)
 
 ### `preload.js` — Renderer Bridge
 
@@ -132,13 +153,15 @@ If `electron-builder` cannot download its binaries automatically:
 
 ### Session Persistence
 
-Session data is stored on disk using Electron's named partition `persist:kiosk`. This includes:
+Session data is stored on disk using zone-specific Electron named partitions,
+such as `persist:kiosk-red` and `persist:kiosk-yellow`. This includes:
 - HTTP cookies
 - `localStorage` and `sessionStorage`
 - IndexedDB
 - Cache
 
-Data survives app restarts. To clear it, delete the partition folder in `%APPDATA%\jp-entry\`.
+Data survives app restarts. To clear it, delete the matching partition folder
+under the app's `.electron-data\Partitions\` directory.
 
 ### Password Persistence
 

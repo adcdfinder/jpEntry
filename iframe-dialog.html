@@ -70,21 +70,27 @@
 </head>
 <body>
   <div class="card">
-    <h2>📦 Embedded Frame Detected</h2>
-    <div class="url" id="iframeUrl">—</div>
+    <h2>Embedded Frame Detected</h2>
+    <div class="url" id="iframeUrl"></div>
     <p>Navigate to this URL in the main window?</p>
     <div class="buttons">
-      <button id="goBtn">✅ Navigate</button>
-      <button id="stayBtn">✖ Stay Here</button>
+      <button id="goBtn">Navigate</button>
+      <button id="stayBtn">Stay Here</button>
     </div>
   </div>
   <script>
     const { ipcRenderer } = require('electron');
-    ipcRenderer.on('iframe-url', (_, url) => {
+
+    ipcRenderer.on('iframe-url', (_event, url) => {
       document.getElementById('iframeUrl').textContent = url;
     });
-    document.getElementById('goBtn').addEventListener('click', () => ipcRenderer.send('iframe-action', 'navigate'));
-    document.getElementById('stayBtn').addEventListener('click', () => ipcRenderer.send('iframe-action', 'stay'));
+
+    document.getElementById('goBtn').addEventListener('click', () => {
+      ipcRenderer.send('iframe-action', 'navigate');
+    });
+    document.getElementById('stayBtn').addEventListener('click', () => {
+      ipcRenderer.send('iframe-action', 'stay');
+    });
   </script>
 </body>
 </html>

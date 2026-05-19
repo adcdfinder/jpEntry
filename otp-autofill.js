@@ -1,21 +1,85 @@
 'use strict';
 
-const OTP_LOGIN_URL = 'http://192.168.88.250:8080/core/auth/login/otp/';
+const DEFAULT_KIOSK_ZONE = 'red';
+const KIOSK_ZONES = [
+  {
+    key: 'red',
+    label: 'Red Zone',
+    url: 'http://192.168.88.250:8080',
+  },
+  {
+    key: 'yellow',
+    label: 'Yellow Zone',
+    url: 'http://192.168.20.250:80',
+  },
+];
+const OTP_LOGIN_PATH = '/core/auth/login/otp/';
 
 function normalizeUrlPath(pathname) {
   return String(pathname || '').replace(/\/+$/, '') || '/';
 }
 
+function normalizeOrigin(value) {
+  try {
+    const origin = new URL(value).origin;
+    return origin === 'null' ? null : origin;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function kioskZoneByKey(key) {
+  return KIOSK_ZONES.find((zone) => zone.key === key) ||
+    KIOSK_ZONES.find((zone) => zone.key === DEFAULT_KIOSK_ZONE) ||
+    KIOSK_ZONES[0];
+}
+
+function defaultKioskUrl(zoneKey = DEFAULT_KIOSK_ZONE) {
+  const zone = kioskZoneByKey(zoneKey);
+  return zone ? zone.url : '';
+}
+
+function knownKioskOrigins() {
+  return KIOSK_ZONES
+    .map((zone) => normalizeOrigin(zone.url))
+    .filter(Boolean);
+}
+
+function isKnownKioskOrigin(value) {
+  const origin = normalizeOrigin(value);
+  return Boolean(origin && knownKioskOrigins().includes(origin));
+}
+
+function kioskOriginForUrl(value) {
+  return isKnownKioskOrigin(value) ? normalizeOrigin(value) : null;
+}
+
+function hasOtpUrlHint(url) {
+  const haystack = decodeURIComponent([
+    url.pathname,
+    url.search,
+    url.hash,
+  ].join(' ')).toLowerCase();
+  return /otp|totp|mfa|2fa|two[-_\s]?factor|verification/.test(haystack);
+}
+
 function isOtpLoginUrl(value) {
   try {
     const url = new URL(value);
-    const target = new URL(OTP_LOGIN_URL);
-    return url.protocol === target.protocol &&
-      url.host === target.host &&
-      normalizeUrlPath(url.pathname) === normalizeUrlPath(target.pathname);
+    return isKnownKioskOrigin(url.href) &&
+      (
+        normalizeUrlPath(url.pathname) === normalizeUrlPath(OTP_LOGIN_PATH) ||
+        hasOtpUrlHint(url)
+      );
   } catch (_err) {
     return false;
   }
+}
+
+function otpOriginForUrl(value, options = {}) {
+  if (!isOtpLoginUrl(value) && !options.hasOtpInput) return null;
+  if (!isKnownKioskOrigin(value)) return null;
+  return normalizeOrigin(value);
 }
 
 function attr(input, name) {
@@ -47,7 +111,7 @@ function otpHintText(input) {
 }
 
 function isOtpHinted(input) {
-  return /otp|totp|mfa|2fa|two[-_\s]?factor|verification|authenticator|code/.test(
+  return /otp|totp|mfa|2fa|two[-_\s]?factor|verification|authenticator|code|验证码|动态码|认证码|安全码|令牌|口令|多因素|双因素/.test(
     otpHintText(input)
   );
 }
@@ -105,8 +169,14 @@ function isValidOtpSecret(secret) {
 }
 
 module.exports = {
-  OTP_LOGIN_URL,
+  DEFAULT_KIOSK_ZONE,
+  KIOSK_ZONES,
+  OTP_LOGIN_PATH,
+  defaultKioskUrl,
+  isKnownKioskOrigin,
+  kioskOriginForUrl,
   isOtpLoginUrl,
+  otpOriginForUrl,
   findOtpInput,
   otpTokenFromSecret,
   normalizeOtpSecret,
