@@ -398,9 +398,10 @@
     };
 
     function formatDuration(ms) {
-      if (!ms) return '0s';
-      if (ms < 1000) return '<1s';
-      const seconds = Math.ceil(ms / 1000);
+      const value = Number(ms);
+      if (!Number.isFinite(value) || value <= 0) return '0s';
+      if (value < 1000) return '<1s';
+      const seconds = Math.ceil(value / 1000);
       if (seconds < 60) return seconds + 's';
       const minutes = Math.floor(seconds / 60);
       const rest = seconds % 60;
@@ -441,10 +442,21 @@
         estimateConfig.finishDelayMs;
     }
 
+    function normalizeEstimateMs(value, fallbackText) {
+      const raw = value && typeof value === 'object' && 'estimateMs' in value
+        ? value.estimateMs
+        : value;
+      const number = Number(raw);
+      if (Number.isFinite(number) && number >= 0) return number;
+      return localEstimate(fallbackText);
+    }
+
     function updateSummary(ms) {
       const text = textInput.value;
       charCount.textContent = String(Array.from(text).length);
-      estimate.textContent = formatDuration(ms == null ? localEstimate(text) : ms);
+      estimate.textContent = formatDuration(
+        ms == null ? localEstimate(text) : normalizeEstimateMs(ms, text)
+      );
     }
 
     function requestEstimate() {
@@ -505,6 +517,10 @@
 
     textInput.addEventListener('input', requestEstimate);
     speedInput.addEventListener('input', () => {
+      updateSpeedLabel();
+      requestEstimate();
+    });
+    speedInput.addEventListener('change', () => {
       updateSpeedLabel();
       requestEstimate();
     });

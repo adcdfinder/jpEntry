@@ -81,6 +81,7 @@ let urlDialogWindow = null;
 let navDialogWindow = null;
 let iframeDialogWindow = null;
 let pasteDialogWindow = null;
+let pasteBlockerWindow = null;
 let credentialDialogWindow = null;
 let pasteAborted = false;
 let pasteLocked = false;
@@ -306,12 +307,13 @@ function estimatePasteDurationMs(
   const total = pasteCharacters(text).length;
   if (!total) return 0;
 
-  return PASTE_FOCUS_DELAY_MS +
+  const duration = PASTE_FOCUS_DELAY_MS +
     PASTE_PRIME_DELAY_MS +
     (hurryMode
       ? Math.ceil(total / PASTE_HURRY_BATCH_SIZE) * PASTE_HURRY_BATCH_DELAY_MS
       : total * pasteCharDelayMs(charsPerSecond)) +
     PASTE_FINISH_DELAY_MS;
+  return Number.isFinite(duration) && duration >= 0 ? duration : 0;
 }
 
 function pasteDialogPayload(text, source) {
@@ -339,18 +341,71 @@ function setPasteDialogInputLocked(locked) {
   pasteDialogWindow.setIgnoreMouseEvents(locked);
 }
 
+function closePasteInputBlocker() {
+  if (pasteBlockerWindow && !pasteBlockerWindow.isDestroyed()) {
+    pasteBlockerWindow.close();
+  }
+  pasteBlockerWindow = null;
+}
+
+function showPasteInputBlocker() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (pasteBlockerWindow && !pasteBlockerWindow.isDestroyed()) {
+    pasteBlockerWindow.showInactive();
+    return;
+  }
+
+  const display = screen.getDisplayMatching(mainWindow.getBounds());
+  const bounds = display.bounds || mainWindow.getBounds();
+  pasteBlockerWindow = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    show: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+  pasteBlockerWindow.setAlwaysOnTop(true, 'screen-saver');
+
+  pasteBlockerWindow.loadURL(
+    'data:text/html;charset=utf-8,' +
+    encodeURIComponent('<!doctype html><html><body style="width:100vw;height:100vh;margin:0;background:rgba(0,0,0,0.01);cursor:not-allowed;"></body></html>')
+  );
+  pasteBlockerWindow.setIgnoreMouseEvents(false);
+  pasteBlockerWindow.once('closed', () => {
+    pasteBlockerWindow = null;
+  });
+  pasteBlockerWindow.once('ready-to-show', () => {
+    if (pasteBlockerWindow && !pasteBlockerWindow.isDestroyed()) {
+      pasteBlockerWindow.showInactive();
+    }
+  });
+}
+
 function beginPasteInputLock() {
   pasteLocked = true;
+  showPasteInputBlocker();
   setPasteDialogInputLocked(true);
 
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.setIgnoreMouseEvents(true);
+    mainWindow.setIgnoreMouseEvents(false);
   }
 }
 
 function endPasteInputLock() {
   pasteLocked = false;
   setPasteDialogInputLocked(false);
+  closePasteInputBlocker();
 
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setIgnoreMouseEvents(false);
@@ -569,7 +624,10 @@ function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
     event.preventDefault();
   });
 
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.on('closed', () => {
+    closePasteInputBlocker();
+    mainWindow = null;
+  });
 }
 
 function createNavDialog() {
