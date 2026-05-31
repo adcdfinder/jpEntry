@@ -1,16 +1,40 @@
 'use strict';
 
 const { contextBridge, ipcRenderer } = require('electron');
-const { formatResolution } = require('./resolution-settings');
 
 contextBridge.exposeInMainWorld('kioskBridge', {
   onIframeDetected: (callback) => ipcRenderer.on('check-iframes', callback),
 });
 
+const MIN_REMOTE_WIDTH = 640;
+const MIN_REMOTE_HEIGHT = 480;
+const MAX_REMOTE_WIDTH = 7680;
+const MAX_REMOTE_HEIGHT = 4320;
+
 let kioskOrigins = [];
 let otpLoginPath = '';
 let kioskConfigPromise = null;
 let remoteResolutionOverride = readInitialResolutionOverride();
+
+function formatResolution(value) {
+  const match = String(value || '').trim().match(/^(\d{2,5})\s*x\s*(\d{2,5})$/i);
+  if (!match) return '';
+
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (
+    !Number.isSafeInteger(width) ||
+    !Number.isSafeInteger(height) ||
+    width < MIN_REMOTE_WIDTH ||
+    height < MIN_REMOTE_HEIGHT ||
+    width > MAX_REMOTE_WIDTH ||
+    height > MAX_REMOTE_HEIGHT
+  ) {
+    return '';
+  }
+
+  return `${width}x${height}`;
+}
 
 function readInitialResolutionOverride() {
   const prefix = '--jp-remote-resolution=';

@@ -93,6 +93,12 @@ test('main process keeps shortcuts window-scoped for multi-instance use', () => 
   assert.match(main, /before-input-event/);
 });
 
+test('preload stays compatible with sandboxed renderer windows', () => {
+  const preload = readProjectFile('preload.js');
+
+  assert.doesNotMatch(preload, /require\(['"]\.{1,2}\//);
+});
+
 test('packaged build includes every local runtime module used by main process', () => {
   const packageJson = JSON.parse(readProjectFile('package.json'));
   const files = packageJson.build && packageJson.build.files;
