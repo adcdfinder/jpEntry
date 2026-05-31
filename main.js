@@ -12,6 +12,7 @@ const {
   dialog,
 } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { authenticator } = require('otplib');
 const {
   createCredentialStore,
@@ -33,6 +34,8 @@ const {
   MIN_WIDTH,
   PRESET_RESOLUTIONS,
   applyResolutionToGuacamoleUrl,
+  isConnectionTokenUrl,
+  isLionConnectWebSocketUrl,
   normalizeResolutionSetting,
   resolutionLabel,
   resolutionOverrideFromSetting,
@@ -119,6 +122,53 @@ const PASTE_PRIME_DELAY_MS = 150;
 const PASTE_FINISH_DELAY_MS = 350;
 const PASTE_HURRY_BATCH_SIZE = 20;
 const PASTE_HURRY_BATCH_DELAY_MS = 16;
+const RESOLUTION_DEBUG_PREFIX = '[JP Entry][resolution]';
+let resolutionDebugEnabledCache = null;
+
+function resolutionDebugFlagPath() {
+  return path.join(app.getPath('userData'), 'resolution-debug.enabled');
+}
+
+function resolutionDebugLogPath() {
+  return path.join(app.getPath('userData'), 'resolution-debug.log');
+}
+
+function isResolutionDebugEnabled() {
+  if (process.env.JP_RESOLUTION_DEBUG === '1') return true;
+  if (resolutionDebugEnabledCache != null) return resolutionDebugEnabledCache;
+
+  try {
+    resolutionDebugEnabledCache = fs.existsSync(resolutionDebugFlagPath());
+  } catch (_err) {
+    resolutionDebugEnabledCache = false;
+  }
+  return resolutionDebugEnabledCache;
+}
+
+function safeLogValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch (_err) {
+    return String(value);
+  }
+}
+
+function resolutionDebugLog(...parts) {
+  if (!isResolutionDebugEnabled()) return;
+
+  const message = parts.map(safeLogValue).join(' ');
+  const line = `${new Date().toISOString()} ${message}`;
+  console.log(`${RESOLUTION_DEBUG_PREFIX} ${message}`);
+
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true });
+    fs.appendFileSync(resolutionDebugLogPath(), `${line}\n`, 'utf8');
+  } catch (_err) {
+    // Debug logging must never affect kiosk navigation.
+  }
+}
 
 // ── Session setup ─────────────────────────────────────────────────────────────
 // Called when a kiosk profile is selected. Each profile gets its own
@@ -227,6 +277,7 @@ function resolutionDialogPayload(displayBounds = currentResolutionDisplayBounds(
 function sendResolutionOverrideToMainWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
+  resolutionDebugLog('send renderer override', activeResolutionOverrideText() || '(auto)');
   mainWindow.webContents.send(
     'remote-resolution-override',
     activeResolutionOverrideText()
@@ -236,18 +287,93 @@ function sendResolutionOverrideToMainWindow() {
 function setActiveResolutionSetting(setting, displayBounds = currentResolutionDisplayBounds()) {
   activeResolutionSetting = normalizeResolutionSetting(setting);
   activeResolutionDisplayBounds = displayBounds;
+  resolutionDebugLog(
+    'set resolution',
+    { setting: activeResolutionSetting, displayBounds, override: activeResolutionOverrideText() || '(auto)' }
+  );
   sendResolutionOverrideToMainWindow();
+}
+
+function readableUploadBody(details) {
+  const chunks = [];
+  for (const item of details.uploadData || []) {
+    if (item.bytes) {
+      chunks.push(Buffer.from(item.bytes));
+    }
+  }
+
+  if (!chunks.length) return '';
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function uploadResolutionSummary(details) {
+  const body = readableUploadBody(details);
+  if (!body) return { hasBody: false };
+
+  try {
+    const data = JSON.parse(body);
+    const options = data && typeof data === 'object' && !Array.isArray(data)
+      ? data.connect_options
+      : null;
+    return {
+      hasBody: true,
+      hasConnectOptions: Boolean(options && typeof options === 'object' && !Array.isArray(options)),
+      resolution: options && options.resolution ? String(options.resolution) : '',
+    };
+  } catch (_err) {
+    return { hasBody: true, json: false };
+  }
+}
+
+function describeRequestUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const params = url.searchParams;
+    return {
+      location: `${url.protocol}//${url.host}${url.pathname}`,
+      width: params.get('GUAC_WIDTH') || '',
+      height: params.get('GUAC_HEIGHT') || '',
+    };
+  } catch (_err) {
+    return { location: String(rawUrl || '') };
+  }
 }
 
 function attachResolutionWebRequestHandler(partition, ses) {
   if (resolutionHookedPartitions.has(partition)) return;
   resolutionHookedPartitions.add(partition);
 
-  ses.webRequest.onBeforeRequest({ urls: ['ws://*/*', 'wss://*/*'] }, (details, callback) => {
+  resolutionDebugLog('attach webRequest', partition);
+  ses.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => {
+    if (isConnectionTokenUrl(details.url)) {
+      resolutionDebugLog(
+        'token request observed',
+        details.method,
+        describeRequestUrl(details.url),
+        uploadResolutionSummary(details)
+      );
+      callback({});
+      return;
+    }
+
     const nextUrl = applyResolutionToGuacamoleUrl(
       details.url,
       activeResolutionOverrideText()
     );
+
+    if (isLionConnectWebSocketUrl(details.url) || isLionConnectWebSocketUrl(nextUrl)) {
+      resolutionDebugLog(
+        nextUrl && nextUrl !== details.url ? 'lion ws redirect' : 'lion ws observed',
+        {
+          override: activeResolutionOverrideText() || '(auto)',
+          before: describeRequestUrl(details.url),
+          after: describeRequestUrl(nextUrl),
+        }
+      );
+    } else if (/\/lion\/|GUAC_WIDTH|GUAC_HEIGHT/i.test(details.url)) {
+      resolutionDebugLog('ws observed non-matching', describeRequestUrl(details.url));
+    }
+
     callback(nextUrl && nextUrl !== details.url ? { redirectURL: nextUrl } : {});
   });
 }
@@ -632,8 +758,22 @@ function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
       partition: activePartition,
       additionalArguments: [
         `--jp-remote-resolution=${encodeURIComponent(activeResolutionOverrideText())}`,
+        `--jp-resolution-debug=${isResolutionDebugEnabled() ? '1' : '0'}`,
       ],
     },
+  });
+
+  resolutionDebugLog('create main window', {
+    url,
+    profileKey: activeProfileKey,
+    partition: activePartition,
+    override: activeResolutionOverrideText() || '(auto)',
+  });
+
+  mainWindow.webContents.on('console-message', (_event, _level, message, line, sourceId) => {
+    if (String(message || '').includes(RESOLUTION_DEBUG_PREFIX)) {
+      resolutionDebugLog('renderer', { message, line, sourceId });
+    }
   });
 
   loadMainUrl(url);

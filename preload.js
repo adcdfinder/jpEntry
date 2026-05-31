@@ -15,6 +15,7 @@ let kioskOrigins = [];
 let otpLoginPath = '';
 let kioskConfigPromise = null;
 let remoteResolutionOverride = readInitialResolutionOverride();
+let remoteResolutionDebug = readResolutionDebugFlag();
 
 function formatResolution(value) {
   const match = String(value || '').trim().match(/^(\d{2,5})\s*x\s*(\d{2,5})$/i);
@@ -48,6 +49,17 @@ function readInitialResolutionOverride() {
   }
 }
 
+function readResolutionDebugFlag() {
+  const prefix = '--jp-resolution-debug=';
+  const arg = process.argv.find((item) => String(item || '').startsWith(prefix));
+  return Boolean(arg && arg.slice(prefix.length) === '1');
+}
+
+function resolutionDebugLog(...parts) {
+  if (!remoteResolutionDebug) return;
+  console.log('[JP Entry][resolution]', parts.join(' '));
+}
+
 function injectPageWorldScript(source) {
   function append() {
     const target = document.documentElement || document.head || document.body;
@@ -69,9 +81,17 @@ function remoteResolutionPatchSource(resolutionText) {
   return `
     (function() {
       var nextResolution = ${JSON.stringify(formatResolution(resolutionText))};
+      var debugEnabled = ${remoteResolutionDebug ? 'true' : 'false'};
+
+      function debugLog(message) {
+        if (debugEnabled && window.console && typeof window.console.log === 'function') {
+          window.console.log('[JP Entry][resolution] ' + message);
+        }
+      }
 
       function setResolution(value) {
         window.__jpRemoteResolution = typeof value === 'string' ? value : '';
+        debugLog('page resolution=' + (window.__jpRemoteResolution || '(auto)'));
       }
 
       function isConnectionTokenUrl(rawUrl) {
@@ -110,6 +130,7 @@ function remoteResolutionPatchSource(resolutionText) {
 
       if (!window.__jpResolutionPatchInstalled) {
         window.__jpResolutionPatchInstalled = true;
+        debugLog('page patch installed');
 
         var nativeFetch = window.fetch;
         if (typeof nativeFetch === 'function') {
@@ -119,6 +140,9 @@ function remoteResolutionPatchSource(resolutionText) {
 
             if (init && shouldPatch(requestUrl, method) && typeof init.body === 'string') {
               init = Object.assign({}, init, { body: patchBody(init.body) });
+              debugLog('patched fetch token body resolution=' + window.__jpRemoteResolution);
+            } else if (shouldPatch(requestUrl, method)) {
+              debugLog('fetch token body not patched type=' + typeof (init && init.body));
             }
 
             return nativeFetch.call(this, input, init);
@@ -137,6 +161,7 @@ function remoteResolutionPatchSource(resolutionText) {
           window.XMLHttpRequest.prototype.send = function(body) {
             if (shouldPatch(this.__jpRequestUrl, this.__jpRequestMethod)) {
               body = patchBody(body);
+              debugLog('patched xhr token body resolution=' + window.__jpRemoteResolution);
             }
             return nativeSend.call(this, body);
           };
@@ -150,6 +175,7 @@ function remoteResolutionPatchSource(resolutionText) {
 
 function installRemoteResolutionPatch(resolutionText) {
   remoteResolutionOverride = formatResolution(resolutionText);
+  resolutionDebugLog('preload install override=' + (remoteResolutionOverride || '(auto)'));
   injectPageWorldScript(remoteResolutionPatchSource(remoteResolutionOverride));
 }
 
