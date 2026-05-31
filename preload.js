@@ -270,10 +270,116 @@ function remoteResolutionPatchSource(resolutionText) {
           debugLog('patched Guacamole connect data resolution=' + resolution.text);
           return params.toString();
         } catch (_err) {
-          return data
-            .replace(/(^|&)GUAC_WIDTH=[^&]*/i, '$1GUAC_WIDTH=' + resolution.width)
-            .replace(/(^|&)GUAC_HEIGHT=[^&]*/i, '$1GUAC_HEIGHT=' + resolution.height);
+          return patchGuacamoleQueryParameter(
+            patchGuacamoleQueryParameter(data, 'GUAC_WIDTH', resolution.width),
+            'GUAC_HEIGHT',
+            resolution.height
+          );
         }
+      }
+
+      function patchGuacamoleQueryParameter(data, key, value) {
+        var pattern = new RegExp('(^|&)' + key + '=[^&]*', 'i');
+        if (pattern.test(data)) {
+          return data.replace(pattern, '$1' + key + '=' + value);
+        }
+        return data ? data + '&' + key + '=' + value : key + '=' + value;
+      }
+
+      function isGuacamoleTunnelUrl(rawUrl) {
+        if (!rawUrl) return false;
+        try {
+          var url = new URL(String(rawUrl), window.location.href);
+          return /\\/guacamole\\/websocket-tunnel\\/?$/i.test(url.pathname);
+        } catch (_err) {
+          return /\\/guacamole\\/websocket-tunnel/i.test(String(rawUrl));
+        }
+      }
+
+      function patchGuacamoleWebSocketUrl(rawUrl) {
+        var resolution = resolutionParts();
+        if (!resolution || !rawUrl) return rawUrl;
+
+        try {
+          var url = new URL(String(rawUrl), window.location.href);
+          if (!isGuacamoleTunnelUrl(url.href)) return rawUrl;
+
+          var before = url.searchParams.get('GUAC_WIDTH') + 'x' + url.searchParams.get('GUAC_HEIGHT');
+          url.searchParams.set('GUAC_WIDTH', String(resolution.width));
+          url.searchParams.set('GUAC_HEIGHT', String(resolution.height));
+          if (before !== resolution.text) {
+            debugLog('patched Guacamole WebSocket URL from=' + before + ' to=' + resolution.text);
+          }
+          return url.href;
+        } catch (_err) {
+          return rawUrl;
+        }
+      }
+
+      function guacamoleProtocolElement(value) {
+        var text = String(value);
+        return text.length + '.' + text;
+      }
+
+      function patchGuacamoleSizeInstruction(data) {
+        var resolution = resolutionParts();
+        if (!resolution || typeof data !== 'string') return data;
+
+        var match = data.match(/^4\\.size,(\\d+)\\.([^,;]*),(\\d+)\\.([^,;]*);$/);
+        if (!match) return data;
+
+        if (match[2] === String(resolution.width) && match[4] === String(resolution.height)) {
+          return data;
+        }
+
+        debugLog('patched Guacamole socket size from=' + match[2] + 'x' + match[4] + ' to=' + resolution.text);
+        return [
+          guacamoleProtocolElement('size'),
+          guacamoleProtocolElement(resolution.width),
+          guacamoleProtocolElement(resolution.height)
+        ].join(',') + ';';
+      }
+
+      function patchGuacamoleSocket(socket, rawUrl) {
+        if (!socket || socket.__jpResolutionSocketPatched || !isGuacamoleTunnelUrl(rawUrl)) {
+          return socket;
+        }
+
+        var nativeSend = socket.send;
+        if (typeof nativeSend !== 'function') return socket;
+
+        socket.__jpResolutionSocketPatched = true;
+        socket.send = function(data) {
+          return nativeSend.call(this, patchGuacamoleSizeInstruction(data));
+        };
+        debugLog('patched Guacamole WebSocket send hook');
+        return socket;
+      }
+
+      function installGuacamoleWebSocketHook() {
+        var NativeWebSocket = window.WebSocket;
+        if (typeof NativeWebSocket !== 'function' || NativeWebSocket.__jpResolutionWrapped) return;
+
+        function WrappedWebSocket(url, protocols) {
+          var nextUrl = patchGuacamoleWebSocketUrl(url);
+          var socket = arguments.length > 1
+            ? new NativeWebSocket(nextUrl, protocols)
+            : new NativeWebSocket(nextUrl);
+          return patchGuacamoleSocket(socket, nextUrl);
+        }
+
+        WrappedWebSocket.prototype = NativeWebSocket.prototype;
+        Object.keys(NativeWebSocket).forEach(function(key) {
+          WrappedWebSocket[key] = NativeWebSocket[key];
+        });
+        ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach(function(key) {
+          if (key in NativeWebSocket) {
+            WrappedWebSocket[key] = NativeWebSocket[key];
+          }
+        });
+        WrappedWebSocket.__jpResolutionWrapped = true;
+        window.WebSocket = WrappedWebSocket;
+        debugLog('installed Guacamole WebSocket resolution hook');
       }
 
       function patchGuacamoleClientInstance(client) {
@@ -323,12 +429,44 @@ function remoteResolutionPatchSource(resolutionText) {
         return WrappedClient;
       }
 
-      function installGuacamoleClientHook() {
-        var guac = window.Guacamole || {};
-        window.Guacamole = guac;
+      function currentGuacamoleNamespace() {
+        var guac = window.Guacamole;
+        if (!isObject(guac) || Array.isArray(guac)) {
+          guac = {};
+          window.Guacamole = guac;
+        }
+        return guac;
+      }
+
+      function patchCurrentGuacamoleClient(reason) {
+        var guac = window.Guacamole;
+        if (!isObject(guac) || Array.isArray(guac)) return false;
+
+        var Client = guac.Client;
+        var wrappedClient = wrapGuacamoleClientConstructor(Client);
+        if (wrappedClient !== Client) {
+          try {
+            guac.Client = wrappedClient;
+          } catch (_err) {
+            return false;
+          }
+          debugLog('wrapped current Guacamole.Client reason=' + reason);
+          return true;
+        }
+
+        return Boolean(Client && Client.__jpResolutionWrapped);
+      }
+
+      function installGuacamoleClientHook(reason) {
+        var guac = currentGuacamoleNamespace();
 
         var descriptor = Object.getOwnPropertyDescriptor(guac, 'Client');
-        if (descriptor && descriptor.get && descriptor.get.__jpResolutionHooked) return;
+        if (descriptor && descriptor.get && descriptor.get.__jpResolutionHooked) {
+          return patchCurrentGuacamoleClient(reason + ':existing-client-hook');
+        }
+        if (descriptor && descriptor.configurable === false) {
+          return patchCurrentGuacamoleClient(reason + ':non-configurable-client');
+        }
 
         var storedClient = guac.Client;
         function getClient() {
@@ -336,27 +474,89 @@ function remoteResolutionPatchSource(resolutionText) {
         }
         getClient.__jpResolutionHooked = true;
 
-        Object.defineProperty(guac, 'Client', {
-          configurable: true,
-          enumerable: true,
-          get: getClient,
-          set: function(value) {
-            storedClient = wrapGuacamoleClientConstructor(value);
-            if (storedClient !== value) {
-              debugLog('wrapped Guacamole.Client for resolution override');
+        try {
+          Object.defineProperty(guac, 'Client', {
+            configurable: true,
+            enumerable: true,
+            get: getClient,
+            set: function(value) {
+              storedClient = wrapGuacamoleClientConstructor(value);
+              if (storedClient !== value) {
+                debugLog('wrapped Guacamole.Client for resolution override reason=' + reason);
+              }
             }
-          }
-        });
+          });
+        } catch (_err) {
+          debugLog('failed to install Guacamole.Client hook reason=' + reason);
+          return patchCurrentGuacamoleClient(reason + ':client-hook-failed');
+        }
+        debugLog('installed Guacamole.Client hook reason=' + reason);
 
         if (storedClient) {
           guac.Client = storedClient;
         }
+        return patchCurrentGuacamoleClient(reason + ':post-install');
+      }
+
+      function installGuacamoleNamespaceHook(reason) {
+        var descriptor = Object.getOwnPropertyDescriptor(window, 'Guacamole');
+        if (descriptor && descriptor.get && descriptor.get.__jpResolutionHooked) {
+          return installGuacamoleClientHook(reason + ':existing-namespace-hook');
+        }
+
+        if (descriptor && descriptor.configurable === false) {
+          return installGuacamoleClientHook(reason + ':non-configurable-namespace');
+        }
+
+        var storedNamespace = isObject(window.Guacamole) && !Array.isArray(window.Guacamole)
+          ? window.Guacamole
+          : {};
+
+        function getGuacamoleNamespace() {
+          return storedNamespace;
+        }
+        getGuacamoleNamespace.__jpResolutionHooked = true;
+
+        try {
+          Object.defineProperty(window, 'Guacamole', {
+            configurable: true,
+            enumerable: true,
+            get: getGuacamoleNamespace,
+            set: function(value) {
+              storedNamespace = isObject(value) && !Array.isArray(value) ? value : {};
+              installGuacamoleClientHook(reason + ':namespace-set');
+            }
+          });
+        } catch (_err) {
+          debugLog('failed to install Guacamole namespace hook reason=' + reason);
+          return installGuacamoleClientHook(reason + ':namespace-hook-failed');
+        }
+        debugLog('installed Guacamole namespace hook reason=' + reason);
+        window.Guacamole = storedNamespace;
+        return installGuacamoleClientHook(reason + ':post-namespace-install');
+      }
+
+      function startGuacamoleHookPolling() {
+        if (window.__jpResolutionGuacamolePollTimer) return;
+
+        var attempts = 0;
+        window.__jpResolutionGuacamolePollTimer = window.setInterval(function() {
+          attempts += 1;
+          var wrapped = installGuacamoleNamespaceHook('poll');
+          if (wrapped || attempts >= 300) {
+            window.clearInterval(window.__jpResolutionGuacamolePollTimer);
+            window.__jpResolutionGuacamolePollTimer = null;
+            debugLog('stopped Guacamole hook polling attempts=' + attempts + ' wrapped=' + Boolean(wrapped));
+          }
+        }, 100);
       }
 
       if (!window.__jpResolutionPatchInstalled) {
         window.__jpResolutionPatchInstalled = true;
         debugLog('page patch installed');
-        installGuacamoleClientHook();
+        installGuacamoleWebSocketHook();
+        installGuacamoleNamespaceHook('initial');
+        startGuacamoleHookPolling();
 
         JSON.parse = function() {
           var parsed = nativeJsonParse.apply(this, arguments);

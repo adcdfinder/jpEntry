@@ -115,6 +115,9 @@ test('preload forces legacy Guacamole connect and resize dimensions', () => {
 
   assert.match(preload, /wrapGuacamoleClientConstructor/);
   assert.match(preload, /patchGuacamoleConnectData/);
+  assert.match(preload, /patchGuacamoleSizeInstruction/);
+  assert.match(preload, /installGuacamoleWebSocketHook/);
+  assert.match(preload, /startGuacamoleHookPolling/);
   assert.match(preload, /GUAC_WIDTH/);
   assert.match(preload, /GUAC_HEIGHT/);
   assert.match(preload, /sendSize/);
