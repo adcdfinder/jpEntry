@@ -345,6 +345,8 @@ function attachResolutionWebRequestHandler(partition, ses) {
 
   resolutionDebugLog('attach webRequest', partition);
   ses.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => {
+    const isWebSocketRequest = /^wss?:/i.test(details.url);
+
     if (isConnectionTokenUrl(details.url)) {
       resolutionDebugLog(
         'token request observed',
@@ -370,7 +372,7 @@ function attachResolutionWebRequestHandler(partition, ses) {
           after: describeRequestUrl(nextUrl),
         }
       );
-    } else if (/\/lion\/|\/guacamole\/|GUAC_WIDTH|GUAC_HEIGHT/i.test(details.url)) {
+    } else if (isWebSocketRequest && (/\/lion\/|\/guacamole\/|GUAC_WIDTH|GUAC_HEIGHT/i.test(details.url))) {
       resolutionDebugLog('ws observed non-matching', describeRequestUrl(details.url));
     }
 

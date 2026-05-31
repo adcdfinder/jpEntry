@@ -94,6 +94,16 @@ function remoteResolutionPatchSource(resolutionText) {
         }
       }
 
+      function resolutionParts() {
+        var match = String(window.__jpRemoteResolution || '').match(/^(\\d+)x(\\d+)$/);
+        if (!match) return null;
+        return {
+          width: Number(match[1]),
+          height: Number(match[2]),
+          text: match[1] + 'x' + match[2]
+        };
+      }
+
       function isObject(value) {
         return value && typeof value === 'object';
       }
@@ -249,9 +259,104 @@ function remoteResolutionPatchSource(resolutionText) {
         }
       }
 
+      function patchGuacamoleConnectData(data) {
+        var resolution = resolutionParts();
+        if (!resolution || typeof data !== 'string') return data;
+
+        try {
+          var params = new URLSearchParams(data);
+          params.set('GUAC_WIDTH', String(resolution.width));
+          params.set('GUAC_HEIGHT', String(resolution.height));
+          debugLog('patched Guacamole connect data resolution=' + resolution.text);
+          return params.toString();
+        } catch (_err) {
+          return data
+            .replace(/(^|&)GUAC_WIDTH=[^&]*/i, '$1GUAC_WIDTH=' + resolution.width)
+            .replace(/(^|&)GUAC_HEIGHT=[^&]*/i, '$1GUAC_HEIGHT=' + resolution.height);
+        }
+      }
+
+      function patchGuacamoleClientInstance(client) {
+        if (!client || client.__jpResolutionClientPatched) return client;
+        client.__jpResolutionClientPatched = true;
+
+        var nativeConnect = client.connect;
+        if (typeof nativeConnect === 'function') {
+          client.connect = function(data) {
+            return nativeConnect.call(this, patchGuacamoleConnectData(data));
+          };
+        }
+
+        var nativeSendSize = client.sendSize;
+        if (typeof nativeSendSize === 'function') {
+          client.sendSize = function(width, height) {
+            var resolution = resolutionParts();
+            if (resolution) {
+              if (width !== resolution.width || height !== resolution.height) {
+                debugLog(
+                  'patched Guacamole sendSize from=' +
+                  width + 'x' + height +
+                  ' to=' + resolution.text
+                );
+              }
+              return nativeSendSize.call(this, resolution.width, resolution.height);
+            }
+            return nativeSendSize.apply(this, arguments);
+          };
+        }
+
+        return client;
+      }
+
+      function wrapGuacamoleClientConstructor(Client) {
+        if (typeof Client !== 'function' || Client.__jpResolutionWrapped) return Client;
+
+        function WrappedClient(tunnel) {
+          return patchGuacamoleClientInstance(new Client(tunnel));
+        }
+
+        WrappedClient.prototype = Client.prototype;
+        Object.keys(Client).forEach(function(key) {
+          WrappedClient[key] = Client[key];
+        });
+        WrappedClient.__jpResolutionWrapped = true;
+        return WrappedClient;
+      }
+
+      function installGuacamoleClientHook() {
+        var guac = window.Guacamole || {};
+        window.Guacamole = guac;
+
+        var descriptor = Object.getOwnPropertyDescriptor(guac, 'Client');
+        if (descriptor && descriptor.get && descriptor.get.__jpResolutionHooked) return;
+
+        var storedClient = guac.Client;
+        function getClient() {
+          return storedClient;
+        }
+        getClient.__jpResolutionHooked = true;
+
+        Object.defineProperty(guac, 'Client', {
+          configurable: true,
+          enumerable: true,
+          get: getClient,
+          set: function(value) {
+            storedClient = wrapGuacamoleClientConstructor(value);
+            if (storedClient !== value) {
+              debugLog('wrapped Guacamole.Client for resolution override');
+            }
+          }
+        });
+
+        if (storedClient) {
+          guac.Client = storedClient;
+        }
+      }
+
       if (!window.__jpResolutionPatchInstalled) {
         window.__jpResolutionPatchInstalled = true;
         debugLog('page patch installed');
+        installGuacamoleClientHook();
 
         JSON.parse = function() {
           var parsed = nativeJsonParse.apply(this, arguments);

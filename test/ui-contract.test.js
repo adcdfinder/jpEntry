@@ -110,6 +110,16 @@ test('preload overrides Luna resolution before connection token creation', () =>
   assert.match(preload, /Object\.assign = function/);
 });
 
+test('preload forces legacy Guacamole connect and resize dimensions', () => {
+  const preload = readProjectFile('preload.js');
+
+  assert.match(preload, /wrapGuacamoleClientConstructor/);
+  assert.match(preload, /patchGuacamoleConnectData/);
+  assert.match(preload, /GUAC_WIDTH/);
+  assert.match(preload, /GUAC_HEIGHT/);
+  assert.match(preload, /sendSize/);
+});
+
 test('packaged build includes every local runtime module used by main process', () => {
   const packageJson = JSON.parse(readProjectFile('package.json'));
   const files = packageJson.build && packageJson.build.files;
