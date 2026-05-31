@@ -97,6 +97,15 @@ test('preload stays compatible with sandboxed renderer windows', () => {
   const preload = readProjectFile('preload.js');
 
   assert.doesNotMatch(preload, /require\(['"]\.{1,2}\//);
+  assert.match(preload, /process\.isMainFrame/);
+  assert.match(preload, /if \(isMainFrame\) \{/);
+});
+
+test('main window runs preload in subframes for embedded Guacamole', () => {
+  const main = readProjectFile('main.js');
+
+  assert.match(main, /nodeIntegrationInSubFrames:\s*true/);
+  assert.match(main, /preload:\s*path\.join\(__dirname,\s*'preload\.js'\)/);
 });
 
 test('preload overrides Luna resolution before connection token creation', () => {

@@ -2,9 +2,13 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('kioskBridge', {
-  onIframeDetected: (callback) => ipcRenderer.on('check-iframes', callback),
-});
+const isMainFrame = process.isMainFrame !== false;
+
+if (isMainFrame) {
+  contextBridge.exposeInMainWorld('kioskBridge', {
+    onIframeDetected: (callback) => ipcRenderer.on('check-iframes', callback),
+  });
+}
 
 const MIN_REMOTE_WIDTH = 640;
 const MIN_REMOTE_HEIGHT = 480;
@@ -670,7 +674,12 @@ function remoteResolutionPatchSource(resolutionText) {
 
 function installRemoteResolutionPatch(resolutionText) {
   remoteResolutionOverride = formatResolution(resolutionText);
-  resolutionDebugLog('preload install override=' + (remoteResolutionOverride || '(auto)'));
+  resolutionDebugLog(
+    'preload install override=' +
+    (remoteResolutionOverride || '(auto)') +
+    ' frame=' +
+    (isMainFrame ? 'main' : 'sub')
+  );
   injectPageWorldScript(remoteResolutionPatchSource(remoteResolutionOverride));
 }
 
@@ -1046,34 +1055,40 @@ const observer = new MutationObserver(() => {
 });
 
 // Allow main process to request a fresh iframe scan (e.g. from nav dialog).
-ipcRenderer.on('force-check-iframes', () => {
-  reportedSrcs.clear();
-  checkIframes();
-});
+if (isMainFrame) {
+  ipcRenderer.on('force-check-iframes', () => {
+    reportedSrcs.clear();
+    checkIframes();
+  });
+}
 
-ipcRenderer.on('otp-fill-now', () => {
-  scheduleOtpAutofill(0, { force: true });
-  setTimeout(() => scheduleOtpAutofill(0, { force: true }), 250);
-  setTimeout(() => scheduleOtpAutofill(0, { force: true }), 750);
-});
+if (isMainFrame) {
+  ipcRenderer.on('otp-fill-now', () => {
+    scheduleOtpAutofill(0, { force: true });
+    setTimeout(() => scheduleOtpAutofill(0, { force: true }), 250);
+    setTimeout(() => scheduleOtpAutofill(0, { force: true }), 750);
+  });
+}
 
-window.addEventListener('DOMContentLoaded', () => {
-  checkIframes();
-  loadKioskConfig().then(() => scheduleOtpAutofill(0));
-  setupCredentialCapture();
-  scheduleCredentialAutofill(150);
-  scheduleOtpAutofill(150);
-  setTimeout(() => scheduleCredentialAutofill(0), 1000);
-  setTimeout(() => scheduleCredentialAutofill(0), 2500);
-  setTimeout(() => scheduleOtpAutofill(0), 1000);
-  setTimeout(() => scheduleOtpAutofill(0), 2500);
+if (isMainFrame) {
+  window.addEventListener('DOMContentLoaded', () => {
+    checkIframes();
+    loadKioskConfig().then(() => scheduleOtpAutofill(0));
+    setupCredentialCapture();
+    scheduleCredentialAutofill(150);
+    scheduleOtpAutofill(150);
+    setTimeout(() => scheduleCredentialAutofill(0), 1000);
+    setTimeout(() => scheduleCredentialAutofill(0), 2500);
+    setTimeout(() => scheduleOtpAutofill(0), 1000);
+    setTimeout(() => scheduleOtpAutofill(0), 2500);
 
-  if (document.body) {
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['src', 'type', 'name', 'id', 'autocomplete'],
-    });
-  }
-});
+    if (document.body) {
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['src', 'type', 'name', 'id', 'autocomplete'],
+      });
+    }
+  });
+}

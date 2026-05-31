@@ -756,6 +756,7 @@ function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      nodeIntegrationInSubFrames: true,
       preload: path.join(__dirname, 'preload.js'),
       partition: activePartition,
       additionalArguments: [
