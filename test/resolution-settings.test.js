@@ -35,14 +35,22 @@ test('computes display and explicit resolution overrides', () => {
   assert.equal(formatResolution('2560x1440'), '2560x1440');
 });
 
-test('rewrites only Lion connect websocket resolution params', () => {
-  const original = 'wss://jump.example/lion/ws/connect/?TOKEN_ID=abc&GUAC_WIDTH=800';
-  const rewritten = applyResolutionToGuacamoleUrl(original, '2560x1440');
-  const url = new URL(rewritten);
+test('rewrites graphical websocket resolution params', () => {
+  const lion = 'wss://jump.example/lion/ws/connect/?TOKEN_ID=abc&GUAC_WIDTH=800';
+  const rewrittenLion = applyResolutionToGuacamoleUrl(lion, '2560x1440');
+  const lionUrl = new URL(rewrittenLion);
 
-  assert.equal(url.searchParams.get('TOKEN_ID'), 'abc');
-  assert.equal(url.searchParams.get('GUAC_WIDTH'), '2560');
-  assert.equal(url.searchParams.get('GUAC_HEIGHT'), '1440');
+  assert.equal(lionUrl.searchParams.get('TOKEN_ID'), 'abc');
+  assert.equal(lionUrl.searchParams.get('GUAC_WIDTH'), '2560');
+  assert.equal(lionUrl.searchParams.get('GUAC_HEIGHT'), '1440');
+
+  const legacy = 'ws://jump.example/guacamole/websocket-tunnel?token=abc&GUAC_WIDTH=2048&GUAC_HEIGHT=1353';
+  const rewrittenLegacy = applyResolutionToGuacamoleUrl(legacy, '2560x1440');
+  const legacyUrl = new URL(rewrittenLegacy);
+
+  assert.equal(legacyUrl.searchParams.get('token'), 'abc');
+  assert.equal(legacyUrl.searchParams.get('GUAC_WIDTH'), '2560');
+  assert.equal(legacyUrl.searchParams.get('GUAC_HEIGHT'), '1440');
   assert.equal(
     applyResolutionToGuacamoleUrl('wss://jump.example/lion/ws/monitor/?SESSION_ID=1', '2560x1440'),
     'wss://jump.example/lion/ws/monitor/?SESSION_ID=1'

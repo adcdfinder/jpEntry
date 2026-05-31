@@ -363,14 +363,14 @@ function attachResolutionWebRequestHandler(partition, ses) {
 
     if (isLionConnectWebSocketUrl(details.url) || isLionConnectWebSocketUrl(nextUrl)) {
       resolutionDebugLog(
-        nextUrl && nextUrl !== details.url ? 'lion ws redirect' : 'lion ws observed',
+        nextUrl && nextUrl !== details.url ? 'guacamole ws redirect' : 'guacamole ws observed',
         {
           override: activeResolutionOverrideText() || '(auto)',
           before: describeRequestUrl(details.url),
           after: describeRequestUrl(nextUrl),
         }
       );
-    } else if (/\/lion\/|GUAC_WIDTH|GUAC_HEIGHT/i.test(details.url)) {
+    } else if (/\/lion\/|\/guacamole\/|GUAC_WIDTH|GUAC_HEIGHT/i.test(details.url)) {
       resolutionDebugLog('ws observed non-matching', describeRequestUrl(details.url));
     }
 

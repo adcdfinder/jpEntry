@@ -102,7 +102,10 @@ function isLionConnectWebSocketUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);
     return /^wss?:$/i.test(url.protocol) &&
-      /\/lion\/ws\/connect\/?$/i.test(url.pathname);
+      (
+        /\/lion\/ws\/connect\/?$/i.test(url.pathname) ||
+        /\/guacamole\/websocket-tunnel\/?$/i.test(url.pathname)
+      );
   } catch (_err) {
     return false;
   }
