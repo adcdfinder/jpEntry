@@ -99,6 +99,17 @@ test('preload stays compatible with sandboxed renderer windows', () => {
   assert.doesNotMatch(preload, /require\(['"]\.{1,2}\//);
 });
 
+test('preload overrides Luna resolution before connection token creation', () => {
+  const preload = readProjectFile('preload.js');
+
+  assert.match(preload, /LunaSetting/);
+  assert.match(preload, /rdp_resolution/);
+  assert.match(preload, /connect_options/);
+  assert.match(preload, /JSON\.parse = function/);
+  assert.match(preload, /JSON\.stringify = function/);
+  assert.match(preload, /Object\.assign = function/);
+});
+
 test('packaged build includes every local runtime module used by main process', () => {
   const packageJson = JSON.parse(readProjectFile('package.json'));
   const files = packageJson.build && packageJson.build.files;

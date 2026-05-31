@@ -82,10 +82,125 @@ function remoteResolutionPatchSource(resolutionText) {
     (function() {
       var nextResolution = ${JSON.stringify(formatResolution(resolutionText))};
       var debugEnabled = ${remoteResolutionDebug ? 'true' : 'false'};
+      var nativeJsonParse = JSON.parse;
+      var nativeJsonStringify = JSON.stringify;
+      var nativeObjectAssign = Object.assign;
+      var nativeStorageGetItem = window.Storage && window.Storage.prototype.getItem;
+      var nativeStorageSetItem = window.Storage && window.Storage.prototype.setItem;
 
       function debugLog(message) {
         if (debugEnabled && window.console && typeof window.console.log === 'function') {
           window.console.log('[JP Entry][resolution] ' + message);
+        }
+      }
+
+      function isObject(value) {
+        return value && typeof value === 'object';
+      }
+
+      function hasOwn(value, key) {
+        return Object.prototype.hasOwnProperty.call(value, key);
+      }
+
+      function looksLikeConnectOptions(value) {
+        if (!isObject(value) || Array.isArray(value)) return false;
+        return hasOwn(value, 'resolution') && (
+          hasOwn(value, 'rdp_connection_speed') ||
+          hasOwn(value, 'token_reusable') ||
+          hasOwn(value, 'appletConnectMethod') ||
+          hasOwn(value, 'virtualappConnectMethod') ||
+          hasOwn(value, 'backspaceAsCtrlH') ||
+          hasOwn(value, 'charset') ||
+          hasOwn(value, 'disableautohash')
+        );
+      }
+
+      function forceResolutionValue(value, seen) {
+        if (!window.__jpRemoteResolution || !isObject(value)) return false;
+        seen = seen || [];
+        if (seen.indexOf(value) !== -1) return false;
+        seen.push(value);
+
+        var changed = false;
+
+        if (isObject(value.graphics) && !Array.isArray(value.graphics)) {
+          if (value.graphics.rdp_resolution !== window.__jpRemoteResolution) {
+            value.graphics.rdp_resolution = window.__jpRemoteResolution;
+            changed = true;
+          }
+        }
+
+        if (
+          hasOwn(value, 'TERMINAL_GRAPHICAL_RESOLUTION') &&
+          value.TERMINAL_GRAPHICAL_RESOLUTION !== window.__jpRemoteResolution
+        ) {
+          value.TERMINAL_GRAPHICAL_RESOLUTION = window.__jpRemoteResolution;
+          changed = true;
+        }
+
+        if (isObject(value.connect_options) && !Array.isArray(value.connect_options)) {
+          if (value.connect_options.resolution !== window.__jpRemoteResolution) {
+            value.connect_options.resolution = window.__jpRemoteResolution;
+            changed = true;
+          }
+        }
+
+        if (isObject(value.connectOption) && !Array.isArray(value.connectOption)) {
+          if (value.connectOption.resolution !== window.__jpRemoteResolution) {
+            value.connectOption.resolution = window.__jpRemoteResolution;
+            changed = true;
+          }
+        }
+
+        if (looksLikeConnectOptions(value) && value.resolution !== window.__jpRemoteResolution) {
+          value.resolution = window.__jpRemoteResolution;
+          changed = true;
+        }
+
+        Object.keys(value).forEach(function(key) {
+          if (isObject(value[key])) {
+            changed = forceResolutionValue(value[key], seen) || changed;
+          }
+        });
+
+        return changed;
+      }
+
+      function cloneWithResolution(value) {
+        if (!window.__jpRemoteResolution || !isObject(value)) return null;
+
+        try {
+          var clone = nativeJsonParse(nativeJsonStringify(value));
+          return forceResolutionValue(clone, []) ? clone : null;
+        } catch (_err) {
+          return null;
+        }
+      }
+
+      function preserveStoredLunaResolution(serializedSetting) {
+        if (!window.__jpRemoteResolution || typeof serializedSetting !== 'string') {
+          return serializedSetting;
+        }
+
+        try {
+          var nextSetting = nativeJsonParse(serializedSetting);
+          if (!isObject(nextSetting) || !isObject(nextSetting.graphics)) {
+            return serializedSetting;
+          }
+
+          var currentRaw = nativeStorageGetItem
+            ? nativeStorageGetItem.call(window.localStorage, 'LunaSetting')
+            : null;
+          var currentSetting = currentRaw ? nativeJsonParse(currentRaw) : null;
+          if (isObject(currentSetting) && isObject(currentSetting.graphics) &&
+              hasOwn(currentSetting.graphics, 'rdp_resolution')) {
+            nextSetting.graphics.rdp_resolution = currentSetting.graphics.rdp_resolution;
+          } else {
+            delete nextSetting.graphics.rdp_resolution;
+          }
+          return nativeJsonStringify(nextSetting);
+        } catch (_err) {
+          return serializedSetting;
         }
       }
 
@@ -110,10 +225,15 @@ function remoteResolutionPatchSource(resolutionText) {
       }
 
       function patchBody(body) {
-        if (!window.__jpRemoteResolution || typeof body !== 'string') return body;
+        if (!window.__jpRemoteResolution) return body;
+
+        if (typeof body !== 'string') {
+          var clonedBody = cloneWithResolution(body);
+          return clonedBody || body;
+        }
 
         try {
-          var data = JSON.parse(body);
+          var data = nativeJsonParse(body);
           if (!data || typeof data !== 'object' || Array.isArray(data)) return body;
 
           var options = data.connect_options;
@@ -122,7 +242,8 @@ function remoteResolutionPatchSource(resolutionText) {
           }
           options.resolution = window.__jpRemoteResolution;
           data.connect_options = options;
-          return JSON.stringify(data);
+          forceResolutionValue(data, []);
+          return nativeJsonStringify(data);
         } catch (_err) {
           return body;
         }
@@ -131,6 +252,54 @@ function remoteResolutionPatchSource(resolutionText) {
       if (!window.__jpResolutionPatchInstalled) {
         window.__jpResolutionPatchInstalled = true;
         debugLog('page patch installed');
+
+        JSON.parse = function() {
+          var parsed = nativeJsonParse.apply(this, arguments);
+          if (forceResolutionValue(parsed, [])) {
+            debugLog('patched parsed JSON resolution=' + window.__jpRemoteResolution);
+          }
+          return parsed;
+        };
+
+        JSON.stringify = function(value, replacer, space) {
+          var clone = cloneWithResolution(value);
+          if (clone) {
+            debugLog('patched JSON.stringify resolution=' + window.__jpRemoteResolution);
+            return nativeJsonStringify.call(this, clone, replacer, space);
+          }
+          return nativeJsonStringify.apply(this, arguments);
+        };
+
+        Object.assign = function() {
+          var assigned = nativeObjectAssign.apply(this, arguments);
+          if (forceResolutionValue(assigned, [])) {
+            debugLog('patched Object.assign resolution=' + window.__jpRemoteResolution);
+          }
+          return assigned;
+        };
+
+        if (nativeStorageGetItem && nativeStorageSetItem) {
+          window.Storage.prototype.getItem = function(key) {
+            var value = nativeStorageGetItem.apply(this, arguments);
+            if (key === 'LunaSetting' && typeof value === 'string') {
+              try {
+                var setting = nativeJsonParse(value);
+                if (forceResolutionValue(setting, [])) {
+                  debugLog('patched LunaSetting read resolution=' + window.__jpRemoteResolution);
+                  return nativeJsonStringify(setting);
+                }
+              } catch (_err) {}
+            }
+            return value;
+          };
+
+          window.Storage.prototype.setItem = function(key, value) {
+            if (key === 'LunaSetting' && typeof value === 'string') {
+              value = preserveStoredLunaResolution(value);
+            }
+            return nativeStorageSetItem.call(this, key, value);
+          };
+        }
 
         var nativeFetch = window.fetch;
         if (typeof nativeFetch === 'function') {
@@ -141,6 +310,27 @@ function remoteResolutionPatchSource(resolutionText) {
             if (init && shouldPatch(requestUrl, method) && typeof init.body === 'string') {
               init = Object.assign({}, init, { body: patchBody(init.body) });
               debugLog('patched fetch token body resolution=' + window.__jpRemoteResolution);
+            } else if (init && shouldPatch(requestUrl, method) && init.body) {
+              init = Object.assign({}, init, { body: patchBody(init.body) });
+              debugLog('patched fetch token object body resolution=' + window.__jpRemoteResolution);
+            } else if (!init && input && typeof input.clone === 'function' && shouldPatch(requestUrl, method)) {
+              return input.clone().text().then(function(body) {
+                var nextInit = {
+                  method: input.method,
+                  headers: input.headers,
+                  body: patchBody(body),
+                  credentials: input.credentials,
+                  cache: input.cache,
+                  redirect: input.redirect,
+                  referrer: input.referrer,
+                  referrerPolicy: input.referrerPolicy,
+                  integrity: input.integrity,
+                  keepalive: input.keepalive,
+                  mode: input.mode
+                };
+                debugLog('patched fetch Request token body resolution=' + window.__jpRemoteResolution);
+                return nativeFetch.call(this, input.url, nextInit);
+              }.bind(this));
             } else if (shouldPatch(requestUrl, method)) {
               debugLog('fetch token body not patched type=' + typeof (init && init.body));
             }
