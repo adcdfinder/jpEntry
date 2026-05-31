@@ -1,6 +1,7 @@
 'use strict';
 
 const { contextBridge, ipcRenderer } = require('electron');
+const { formatResolution } = require('./resolution-settings');
 
 contextBridge.exposeInMainWorld('kioskBridge', {
   onIframeDetected: (callback) => ipcRenderer.on('check-iframes', callback),
@@ -9,6 +10,130 @@ contextBridge.exposeInMainWorld('kioskBridge', {
 let kioskOrigins = [];
 let otpLoginPath = '';
 let kioskConfigPromise = null;
+let remoteResolutionOverride = readInitialResolutionOverride();
+
+function readInitialResolutionOverride() {
+  const prefix = '--jp-remote-resolution=';
+  const arg = process.argv.find((item) => String(item || '').startsWith(prefix));
+  if (!arg) return '';
+
+  try {
+    return formatResolution(decodeURIComponent(arg.slice(prefix.length)));
+  } catch (_err) {
+    return '';
+  }
+}
+
+function injectPageWorldScript(source) {
+  function append() {
+    const target = document.documentElement || document.head || document.body;
+    if (!target) return false;
+
+    const script = document.createElement('script');
+    script.textContent = source;
+    target.appendChild(script);
+    script.remove();
+    return true;
+  }
+
+  if (!append()) {
+    window.addEventListener('DOMContentLoaded', append, { once: true });
+  }
+}
+
+function remoteResolutionPatchSource(resolutionText) {
+  return `
+    (function() {
+      var nextResolution = ${JSON.stringify(formatResolution(resolutionText))};
+
+      function setResolution(value) {
+        window.__jpRemoteResolution = typeof value === 'string' ? value : '';
+      }
+
+      function isConnectionTokenUrl(rawUrl) {
+        try {
+          var url = new URL(rawUrl, window.location.href);
+          return /\\/api\\/v1\\/authentication\\/(?:admin-)?connection-token\\/?$/i.test(url.pathname);
+        } catch (_err) {
+          return false;
+        }
+      }
+
+      function shouldPatch(rawUrl, method) {
+        if (!window.__jpRemoteResolution) return false;
+        if (method && String(method).toUpperCase() !== 'POST') return false;
+        return isConnectionTokenUrl(rawUrl);
+      }
+
+      function patchBody(body) {
+        if (!window.__jpRemoteResolution || typeof body !== 'string') return body;
+
+        try {
+          var data = JSON.parse(body);
+          if (!data || typeof data !== 'object' || Array.isArray(data)) return body;
+
+          var options = data.connect_options;
+          if (!options || typeof options !== 'object' || Array.isArray(options)) {
+            options = {};
+          }
+          options.resolution = window.__jpRemoteResolution;
+          data.connect_options = options;
+          return JSON.stringify(data);
+        } catch (_err) {
+          return body;
+        }
+      }
+
+      if (!window.__jpResolutionPatchInstalled) {
+        window.__jpResolutionPatchInstalled = true;
+
+        var nativeFetch = window.fetch;
+        if (typeof nativeFetch === 'function') {
+          window.fetch = function(input, init) {
+            var requestUrl = typeof input === 'string' ? input : input && input.url;
+            var method = init && init.method ? init.method : input && input.method;
+
+            if (init && shouldPatch(requestUrl, method) && typeof init.body === 'string') {
+              init = Object.assign({}, init, { body: patchBody(init.body) });
+            }
+
+            return nativeFetch.call(this, input, init);
+          };
+        }
+
+        var nativeOpen = window.XMLHttpRequest && window.XMLHttpRequest.prototype.open;
+        var nativeSend = window.XMLHttpRequest && window.XMLHttpRequest.prototype.send;
+        if (nativeOpen && nativeSend) {
+          window.XMLHttpRequest.prototype.open = function(method, url) {
+            this.__jpRequestMethod = method;
+            this.__jpRequestUrl = url;
+            return nativeOpen.apply(this, arguments);
+          };
+
+          window.XMLHttpRequest.prototype.send = function(body) {
+            if (shouldPatch(this.__jpRequestUrl, this.__jpRequestMethod)) {
+              body = patchBody(body);
+            }
+            return nativeSend.call(this, body);
+          };
+        }
+      }
+
+      setResolution(nextResolution);
+    })();
+  `;
+}
+
+function installRemoteResolutionPatch(resolutionText) {
+  remoteResolutionOverride = formatResolution(resolutionText);
+  injectPageWorldScript(remoteResolutionPatchSource(remoteResolutionOverride));
+}
+
+installRemoteResolutionPatch(remoteResolutionOverride);
+
+ipcRenderer.on('remote-resolution-override', (_event, resolutionText) => {
+  installRemoteResolutionPatch(resolutionText);
+});
 
 // Observe DOM for iframe insertions and report their src to main.
 const reportedSrcs = new Set();

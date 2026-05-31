@@ -32,7 +32,7 @@
       color: #5C6773;
       -webkit-app-region: drag;
     }
-    input, button, #error, .zone-toggle {
+    input, button, select, #error, .zone-toggle, .resolution-panel {
       -webkit-app-region: no-drag;
     }
     .drag-handle {
@@ -52,7 +52,8 @@
       color: #399EE6;
       letter-spacing: 0.01em;
     }
-    input {
+    input,
+    select {
       width: 100%;
       padding: 10px 14px;
       border-radius: 10px;
@@ -63,9 +64,33 @@
       outline: none;
       transition: border-color 0.18s, background 0.18s;
     }
-    input:focus {
+    input:focus,
+    select:focus {
       border-color: #399EE6;
       background: #FFFFFF;
+    }
+    .resolution-panel {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid #E8E9EA;
+      border-radius: 10px;
+      background: #FAFBFC;
+    }
+    .field-label {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #7A8591;
+    }
+    .custom-resolution {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .custom-resolution[hidden] {
+      display: none;
     }
     .zone-toggle {
       display: grid;
@@ -143,6 +168,14 @@
     <div id="zoneToggle" class="zone-toggle"></div>
     <input type="text" id="urlInput" placeholder="https://example.com" autofocus />
     <div id="error"></div>
+    <div class="resolution-panel">
+      <label class="field-label" for="resolutionMode">Remote resolution</label>
+      <select id="resolutionMode"></select>
+      <div id="customResolution" class="custom-resolution" hidden>
+        <input type="number" id="resolutionWidth" min="640" max="7680" step="1" />
+        <input type="number" id="resolutionHeight" min="480" max="4320" step="1" />
+      </div>
+    </div>
     <div class="checkbox-row">
       <input type="checkbox" id="fullscreenCheck" checked />
       <label for="fullscreenCheck">Enter full screen mode</label>
@@ -151,10 +184,120 @@
   </div>
   <script>
     const { ipcRenderer } = require('electron');
+    const {
+      DEFAULT_RESOLUTION_SETTING,
+      PRESET_RESOLUTIONS,
+      RESOLUTION_STORAGE_KEY,
+      normalizeResolutionSetting,
+    } = require('./resolution-settings');
     const urlInput = document.getElementById('urlInput');
     const zoneToggle = document.getElementById('zoneToggle');
+    const resolutionMode = document.getElementById('resolutionMode');
+    const customResolution = document.getElementById('customResolution');
+    const resolutionWidth = document.getElementById('resolutionWidth');
+    const resolutionHeight = document.getElementById('resolutionHeight');
     let kioskZones = [];
     let selectedZone = '';
+    let resolutionOptions = {
+      presets: PRESET_RESOLUTIONS,
+      setting: DEFAULT_RESOLUTION_SETTING,
+      displayBounds: null,
+      limits: {
+        minWidth: 640,
+        minHeight: 480,
+        maxWidth: 7680,
+        maxHeight: 4320,
+      },
+    };
+
+    function storedResolutionSetting() {
+      try {
+        const raw = localStorage.getItem(RESOLUTION_STORAGE_KEY);
+        return raw ? normalizeResolutionSetting(JSON.parse(raw)) : null;
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    function saveResolutionSetting(setting) {
+      try {
+        localStorage.setItem(RESOLUTION_STORAGE_KEY, JSON.stringify(setting));
+      } catch (_err) {}
+    }
+
+    function optionValueForSetting(setting) {
+      const normalized = normalizeResolutionSetting(setting);
+      if (normalized.mode === 'auto' || normalized.mode === 'display') {
+        return normalized.mode;
+      }
+      if (normalized.mode === 'preset') {
+        return `preset:${normalized.width}x${normalized.height}`;
+      }
+      return 'custom';
+    }
+
+    function addResolutionOption(value, label) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      resolutionMode.appendChild(option);
+    }
+
+    function renderResolutionOptions(payload) {
+      resolutionOptions = Object.assign({}, resolutionOptions, payload || {});
+      const presets = Array.isArray(resolutionOptions.presets)
+        ? resolutionOptions.presets
+        : PRESET_RESOLUTIONS;
+      const display = resolutionOptions.displayBounds || {};
+      const displayLabel = display.width && display.height
+        ? `Display size (${display.width}x${display.height})`
+        : 'Display size';
+      const setting = storedResolutionSetting() ||
+        normalizeResolutionSetting(resolutionOptions.setting);
+
+      resolutionMode.innerHTML = '';
+      addResolutionOption('auto', 'Auto');
+      addResolutionOption('display', displayLabel);
+      presets.forEach((preset) => {
+        addResolutionOption(`preset:${preset.width}x${preset.height}`, preset.label);
+      });
+      addResolutionOption('custom', 'Custom');
+
+      resolutionMode.value = optionValueForSetting(setting);
+      if (setting.width && setting.height) {
+        resolutionWidth.value = String(setting.width);
+        resolutionHeight.value = String(setting.height);
+      } else {
+        resolutionWidth.value = '1920';
+        resolutionHeight.value = '1080';
+      }
+      updateResolutionInputs();
+    }
+
+    function updateResolutionInputs() {
+      const isCustom = resolutionMode.value === 'custom';
+      customResolution.hidden = !isCustom;
+    }
+
+    function currentResolutionSetting() {
+      const value = resolutionMode.value;
+      if (value === 'auto' || value === 'display') {
+        return { mode: value, width: 0, height: 0 };
+      }
+      if (value.startsWith('preset:')) {
+        const parts = value.slice('preset:'.length).split('x');
+        return normalizeResolutionSetting({
+          mode: 'preset',
+          width: parts[0],
+          height: parts[1],
+        });
+      }
+      return normalizeResolutionSetting({
+        mode: 'custom',
+        width: resolutionWidth.value,
+        height: resolutionHeight.value,
+      });
+    }
 
     function selectZone(zoneKey) {
       const zone = kioskZones.find((item) => item.key === zoneKey);
@@ -195,10 +338,16 @@
       if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
       err.textContent = '';
       const fullscreen = document.getElementById('fullscreenCheck').checked;
-      ipcRenderer.send('url-submitted', { url, fullscreen, zone: selectedZone });
+      const resolution = currentResolutionSetting();
+      saveResolutionSetting(resolution);
+      ipcRenderer.send('url-submitted', { url, fullscreen, zone: selectedZone, resolution });
     }
 
+    renderResolutionOptions({});
+
     ipcRenderer.on('kiosk-zones', (_event, payload) => renderZones(payload));
+    ipcRenderer.on('resolution-options', (_event, payload) => renderResolutionOptions(payload));
+    resolutionMode.addEventListener('change', updateResolutionInputs);
     document.getElementById('okBtn').addEventListener('click', submit);
     urlInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') submit();

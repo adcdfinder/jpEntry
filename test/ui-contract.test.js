@@ -34,6 +34,7 @@ test('navigation dialog exposes the expected operator actions', () => {
     'rootBtn',
     'backBtn',
     'iframeBtn',
+    'resolutionBtn',
     'clearAllCredentialsBtn',
     'quitBtn',
     'cancelBtn',
@@ -44,10 +45,12 @@ test('navigation dialog exposes the expected operator actions', () => {
   assert.match(html, /Go to Root Page/);
   assert.match(html, /Go to Last Page/);
   assert.match(html, /Detect Iframes/);
+  assert.match(html, /Remote Resolution/);
   assert.match(html, /Clear All Passwords/);
   assert.match(html, /bindAction\('rootBtn', 'root'\)/);
   assert.match(html, /bindAction\('backBtn', 'back'\)/);
   assert.match(html, /bindAction\('iframeBtn', 'check-iframes'\)/);
+  assert.match(html, /bindAction\('resolutionBtn', 'resolution'\)/);
   assert.match(html, /bindAction\('clearAllCredentialsBtn', 'clear-all-credentials'\)/);
 });
 
@@ -55,8 +58,21 @@ test('startup URL dialog keeps Red and Yellow zone contract hooks', () => {
   const html = readProjectFile('url-dialog.html');
 
   assert.match(html, /id="zoneToggle"/);
+  assert.match(html, /id="resolutionMode"/);
   assert.match(html, /ipcRenderer\.on\('kiosk-zones'/);
-  assert.match(html, /ipcRenderer\.send\('url-submitted', \{ url, fullscreen, zone: selectedZone \}\)/);
+  assert.match(html, /ipcRenderer\.send\('url-submitted', \{ url, fullscreen, zone: selectedZone, resolution \}\)/);
+});
+
+test('resolution dialog keeps apply and cancel actions wired', () => {
+  const html = readProjectFile('resolution-dialog.html');
+
+  assert.match(html, /id="resolutionMode"/);
+  assert.match(html, /id="resolutionWidth"/);
+  assert.match(html, /id="resolutionHeight"/);
+  assert.match(html, /id="saveBtn"/);
+  assert.match(html, /id="cancelBtn"/);
+  assert.match(html, /resolution-action', \{ action: 'save', setting \}/);
+  assert.match(html, /resolution-action', \{ action: 'cancel' \}/);
 });
 
 test('iframe dialog keeps navigate and stay actions wired', () => {
@@ -88,4 +104,5 @@ test('packaged build includes every local runtime module used by main process', 
   assert.ok(files.includes('credential-store.js'));
   assert.ok(files.includes('instance-profile.js'));
   assert.ok(files.includes('navigation-history.js'));
+  assert.ok(files.includes('resolution-settings.js'));
 });

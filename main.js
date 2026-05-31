@@ -25,6 +25,18 @@ const {
   partitionForProfile,
   profileKeyForKiosk,
 } = require('./instance-profile');
+const {
+  DEFAULT_RESOLUTION_SETTING,
+  MAX_HEIGHT,
+  MAX_WIDTH,
+  MIN_HEIGHT,
+  MIN_WIDTH,
+  PRESET_RESOLUTIONS,
+  applyResolutionToGuacamoleUrl,
+  normalizeResolutionSetting,
+  resolutionLabel,
+  resolutionOverrideFromSetting,
+} = require('./resolution-settings');
 
 const {
   DEFAULT_KIOSK_ZONE,
@@ -83,6 +95,7 @@ let iframeDialogWindow = null;
 let pasteDialogWindow = null;
 let pasteBlockerWindow = null;
 let credentialDialogWindow = null;
+let resolutionDialogWindow = null;
 let pasteAborted = false;
 let pasteLocked = false;
 let pasteSendingSynthetic = false;
@@ -94,6 +107,9 @@ const iframeQueue   = []; // queued iframe srcs waiting for user decision
 const mainNavigationHistory = createNavigationHistory({ limit: 50 });
 let activeProfileKey = 'default';
 let activePartition = partitionForProfile(activeProfileKey);
+let activeResolutionSetting = { ...DEFAULT_RESOLUTION_SETTING };
+let activeResolutionDisplayBounds = null;
+const resolutionHookedPartitions = new Set();
 
 const PASTE_DEFAULT_CHARS_PER_SECOND = 25;
 const PASTE_MIN_CHARS_PER_SECOND = 5;
@@ -114,6 +130,7 @@ function setupSession(partition = activePartition) {
   }
 
   const ses = session.fromPartition(partition);
+  attachResolutionWebRequestHandler(partition, ses);
 
   // Allow all cookies (including HTTP, local IPs, non-standard ports)
   ses.webRequest.onHeadersReceived((details, callback) => {
@@ -164,6 +181,75 @@ function dialogBounds(preferredWidth, preferredHeight, minWidth, minHeight) {
     width,
     height,
   };
+}
+
+function displayBoundsFromDisplay(display) {
+  const fallback = { width: 0, height: 0 };
+  const area = display && (display.bounds || display.workArea);
+  if (!area) return fallback;
+
+  return {
+    width: Math.round(Number(area.width) || 0),
+    height: Math.round(Number(area.height) || 0),
+  };
+}
+
+function currentResolutionDisplayBounds() {
+  const ref = mainWindow || urlDialogWindow || resolutionDialogWindow;
+  const display = ref && !ref.isDestroyed()
+    ? screen.getDisplayMatching(ref.getBounds())
+    : screen.getPrimaryDisplay();
+  return displayBoundsFromDisplay(display);
+}
+
+function activeResolutionOverrideText() {
+  return resolutionOverrideFromSetting(
+    activeResolutionSetting,
+    activeResolutionDisplayBounds || currentResolutionDisplayBounds()
+  );
+}
+
+function resolutionDialogPayload(displayBounds = currentResolutionDisplayBounds()) {
+  return {
+    setting: activeResolutionSetting,
+    displayBounds,
+    label: resolutionLabel(activeResolutionSetting, displayBounds),
+    presets: PRESET_RESOLUTIONS,
+    limits: {
+      minWidth: MIN_WIDTH,
+      minHeight: MIN_HEIGHT,
+      maxWidth: MAX_WIDTH,
+      maxHeight: MAX_HEIGHT,
+    },
+  };
+}
+
+function sendResolutionOverrideToMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  mainWindow.webContents.send(
+    'remote-resolution-override',
+    activeResolutionOverrideText()
+  );
+}
+
+function setActiveResolutionSetting(setting, displayBounds = currentResolutionDisplayBounds()) {
+  activeResolutionSetting = normalizeResolutionSetting(setting);
+  activeResolutionDisplayBounds = displayBounds;
+  sendResolutionOverrideToMainWindow();
+}
+
+function attachResolutionWebRequestHandler(partition, ses) {
+  if (resolutionHookedPartitions.has(partition)) return;
+  resolutionHookedPartitions.add(partition);
+
+  ses.webRequest.onBeforeRequest({ urls: ['ws://*/*', 'wss://*/*'] }, (details, callback) => {
+    const nextUrl = applyResolutionToGuacamoleUrl(
+      details.url,
+      activeResolutionOverrideText()
+    );
+    callback(nextUrl && nextUrl !== details.url ? { redirectURL: nextUrl } : {});
+  });
 }
 
 function loadMainUrl(url) {
@@ -488,8 +574,8 @@ function requestOtpFillSoon() {
 
 function createUrlDialog() {
   urlDialogWindow = new BrowserWindow({
-    width: 520,
-    height: 380,
+    width: 540,
+    height: 520,
     resizable: false,
     frame: false,
     alwaysOnTop: true,
@@ -507,6 +593,10 @@ function createUrlDialog() {
         zones: KIOSK_ZONES,
         defaultZone: DEFAULT_KIOSK_ZONE,
       });
+      urlDialogWindow.webContents.send(
+        'resolution-options',
+        resolutionDialogPayload(currentResolutionDisplayBounds())
+      );
     }
   });
   urlDialogWindow.on('closed', () => { urlDialogWindow = null; });
@@ -515,6 +605,10 @@ function createUrlDialog() {
 function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
   rootUrl = url;
   mainNavigationHistory.reset(url);
+  setActiveResolutionSetting(
+    activeResolutionSetting,
+    displayBoundsFromDisplay(targetDisplay || screen.getPrimaryDisplay())
+  );
   activeProfileKey = profileKeyForKiosk(url, {
     zones: KIOSK_ZONES,
     zoneKey,
@@ -536,6 +630,9 @@ function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
       partition: activePartition,
+      additionalArguments: [
+        `--jp-remote-resolution=${encodeURIComponent(activeResolutionOverrideText())}`,
+      ],
     },
   });
 
@@ -599,6 +696,7 @@ function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
   }
   mainWindow.webContents.on('did-finish-load', injectFocusTracker);
   mainWindow.webContents.on('did-finish-load', requestOtpFillSoon);
+  mainWindow.webContents.on('did-finish-load', sendResolutionOverrideToMainWindow);
   mainWindow.webContents.on('did-navigate', (_event, navigatedUrl) => {
     mainNavigationHistory.record(navigatedUrl);
     injectFocusTracker();
@@ -633,11 +731,11 @@ function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
 function createNavDialog() {
   if (navDialogWindow) { navDialogWindow.focus(); return; }
 
-  const { x, y } = dialogPosition(400, 560);
+  const { x, y } = dialogPosition(400, 590);
   navDialogWindow = new BrowserWindow({
     x, y,
     width: 400,
-    height: 560,
+    height: 590,
     resizable: false,
     frame: false,
     alwaysOnTop: true,
@@ -650,6 +748,41 @@ function createNavDialog() {
   attachWindowScopedShortcuts(navDialogWindow);
   navDialogWindow.loadFile(path.join(__dirname, 'nav-dialog.html'));
   navDialogWindow.on('closed', () => { navDialogWindow = null; });
+}
+
+function createResolutionDialog() {
+  if (resolutionDialogWindow && !resolutionDialogWindow.isDestroyed()) {
+    resolutionDialogWindow.focus();
+    return;
+  }
+
+  const { x, y } = dialogPosition(480, 430);
+  resolutionDialogWindow = new BrowserWindow({
+    x, y,
+    width: 480,
+    height: 430,
+    resizable: false,
+    frame: false,
+    alwaysOnTop: true,
+    icon: ICON,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  attachWindowScopedShortcuts(resolutionDialogWindow);
+  resolutionDialogWindow.loadFile(path.join(__dirname, 'resolution-dialog.html'));
+  resolutionDialogWindow.webContents.on('did-finish-load', () => {
+    if (resolutionDialogWindow && !resolutionDialogWindow.isDestroyed()) {
+      resolutionDialogWindow.webContents.send(
+        'resolution-init',
+        resolutionDialogPayload(currentResolutionDisplayBounds())
+      );
+    }
+  });
+  resolutionDialogWindow.on('closed', () => {
+    resolutionDialogWindow = null;
+  });
 }
 
 function createPasteDialog(initialText = '', source = 'manual') {
@@ -803,6 +936,13 @@ ipcMain.on('url-submitted', (_event, payload) => {
   const url = typeof payload === 'string' ? payload : payload.url;
   const fullscreen = typeof payload === 'string' ? true : Boolean(payload.fullscreen);
   const zoneKey = typeof payload === 'string' ? '' : payload.zone;
+  const resolutionSetting = typeof payload === 'string'
+    ? activeResolutionSetting
+    : payload.resolution;
+  setActiveResolutionSetting(
+    resolutionSetting,
+    displayBoundsFromDisplay(targetDisplay)
+  );
   createMainWindow(url, targetDisplay, fullscreen, zoneKey);
 });
 
@@ -835,6 +975,12 @@ ipcMain.on('nav-action', (_event, action) => {
         deleteAllCredentials();
       }
     }).catch(() => {});
+    return;
+  }
+
+  if (action === 'resolution') {
+    if (navDialogWindow) navDialogWindow.close();
+    createResolutionDialog();
     return;
   }
 
@@ -872,6 +1018,21 @@ ipcMain.on('iframe-action', (_event, action) => {
 
   if (action === 'navigate' && url && mainWindow) {
     loadMainUrl(url);
+  }
+});
+
+ipcMain.on('resolution-action', (_event, payload) => {
+  const action = payload && payload.action;
+
+  if (action === 'save') {
+    setActiveResolutionSetting(
+      payload.setting,
+      currentResolutionDisplayBounds()
+    );
+  }
+
+  if (resolutionDialogWindow && !resolutionDialogWindow.isDestroyed()) {
+    resolutionDialogWindow.close();
   }
 });
 

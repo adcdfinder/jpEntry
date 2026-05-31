@@ -31,6 +31,7 @@
       "instance-profile.js",
       "navigation-history.js",
       "otp-autofill.js",
+      "resolution-settings.js",
       "*.html",
       "icon.ico"
     ],
