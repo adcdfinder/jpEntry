@@ -27,6 +27,9 @@ const {
   profileKeyForKiosk,
 } = require('./instance-profile');
 const {
+  isShortcutKey,
+} = require('./window-shortcuts');
+const {
   DEFAULT_RESOLUTION_SETTING,
   MAX_HEIGHT,
   MAX_WIDTH,
@@ -88,7 +91,8 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');           // bypass driver
 app.commandLine.appendSwitch('enable-features',
   'VaapiVideoDecoder,VaapiVideoEncoder,CanvasOopRasterization');
 
-const ICON = path.join(__dirname, 'icon.ico');
+const ICON_ICO = path.join(__dirname, 'icon.ico');
+const ICON = ICON_ICO;
 
 // ── State ────────────────────────────────────────────────────────────────────
 let mainWindow = null;
@@ -112,6 +116,7 @@ let activeProfileKey = 'default';
 let activePartition = partitionForProfile(activeProfileKey);
 let activeResolutionSetting = { ...DEFAULT_RESOLUTION_SETTING };
 let activeResolutionDisplayBounds = null;
+let mainWindowUsesMacSimpleFullscreen = false;
 const resolutionHookedPartitions = new Set();
 
 const PASTE_DEFAULT_CHARS_PER_SECOND = 25;
@@ -193,6 +198,114 @@ function setupSession(partition = activePartition) {
 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function isMacPlatform() {
+  return process.platform === 'darwin';
+}
+
+function mainWindowDisplayOptions(display, fullscreen) {
+  const bounds = display && display.bounds
+    ? display.bounds
+    : screen.getPrimaryDisplay().bounds;
+
+  if (isMacPlatform()) {
+    const area = fullscreen
+      ? bounds
+      : ((display && display.workArea) || bounds);
+    return {
+      x: area.x,
+      y: area.y,
+      width: area.width,
+      height: area.height,
+      fullscreen: Boolean(fullscreen),
+    };
+  }
+
+  const options = {
+    x: bounds.x,
+    y: bounds.y,
+  };
+
+  if (fullscreen) {
+    options.fullscreen = true;
+  }
+
+  return options;
+}
+
+function parentedPopupOptions(options = {}) {
+  if (!isMacPlatform() || !mainWindow || mainWindow.isDestroyed()) return {};
+
+  return {
+    parent: mainWindow,
+    modal: options.modal !== false,
+  };
+}
+
+function keepPopupWithFullscreenParent(browserWindow) {
+  if (
+    !isMacPlatform() ||
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    !browserWindow ||
+    browserWindow.isDestroyed()
+  ) {
+    return;
+  }
+
+  if (typeof browserWindow.moveTop === 'function') {
+    browserWindow.moveTop();
+  }
+  if (typeof browserWindow.focus === 'function') {
+    browserWindow.focus();
+  }
+}
+
+function operatorWindowChromeOptions() {
+  if (isMacPlatform()) {
+    return {
+      frame: true,
+      alwaysOnTop: false,
+      fullscreenable: false,
+      useContentSize: true,
+    };
+  }
+
+  return {
+    frame: false,
+    alwaysOnTop: true,
+  };
+}
+
+function installApplicationMenu() {
+  if (isMacPlatform()) {
+    return;
+  }
+
+  Menu.setApplicationMenu(null);
+}
+
+function focusPrimaryWindow() {
+  const target = [
+    resolutionDialogWindow,
+    navDialogWindow,
+    pasteDialogWindow,
+    credentialDialogWindow,
+    iframeDialogWindow,
+    mainWindow,
+    urlDialogWindow,
+  ].find((browserWindow) => browserWindow && !browserWindow.isDestroyed());
+
+  if (target) {
+    if (typeof target.show === 'function') target.show();
+    if (typeof target.focus === 'function') target.focus();
+    return;
+  }
+
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createUrlDialog();
+  }
+}
 
 // Returns {x, y} to center a dialog of given size on the same display as mainWindow.
 function dialogPosition(width, height) {
@@ -292,6 +405,47 @@ function setActiveResolutionSetting(setting, displayBounds = currentResolutionDi
     { setting: activeResolutionSetting, displayBounds, override: activeResolutionOverrideText() || '(auto)' }
   );
   sendResolutionOverrideToMainWindow();
+}
+
+function isFullscreenLikeWindow(browserWindow) {
+  if (!browserWindow || browserWindow.isDestroyed()) return true;
+  if (isMacPlatform() && browserWindow === mainWindow && mainWindowUsesMacSimpleFullscreen) {
+    return true;
+  }
+
+  const nativeFullscreen = typeof browserWindow.isFullScreen === 'function' &&
+    browserWindow.isFullScreen();
+  const simpleFullscreen = typeof browserWindow.isSimpleFullScreen === 'function' &&
+    browserWindow.isSimpleFullScreen();
+  return Boolean(nativeFullscreen || simpleFullscreen);
+}
+
+function recreateMainWindowForResolutionChange() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  const previousWindow = mainWindow;
+  const nextUrl = normalizeNavigationUrl(previousWindow.webContents.getURL()) ||
+    rootUrl;
+  const targetDisplay = screen.getDisplayMatching(previousWindow.getBounds());
+  const fullscreen = isFullscreenLikeWindow(previousWindow);
+
+  resolutionDebugLog('recreate main window for resolution change', {
+    url: nextUrl,
+    fullscreen,
+    override: activeResolutionOverrideText() || '(auto)',
+  });
+
+  closePasteInputBlocker();
+  mainWindow = null;
+  mainWindowUsesMacSimpleFullscreen = false;
+
+  if (!previousWindow.isDestroyed()) {
+    previousWindow.close();
+  }
+
+  setTimeout(() => {
+    createMainWindow(nextUrl || rootUrl, targetDisplay, fullscreen);
+  }, 120);
 }
 
 function readableUploadBody(details) {
@@ -414,17 +568,6 @@ function goToPreviousMainPage() {
   }
 
   return loadPreviousRecordedMainPage(currentUrl);
-}
-
-function isShortcutKey(input, key, options = {}) {
-  if (!input || input.type !== 'keyDown') return false;
-  return Boolean(
-    input.control &&
-    input.alt &&
-    !input.meta &&
-    Boolean(input.shift) === Boolean(options.shift) &&
-    String(input.key || '').toLowerCase() === key
-  );
 }
 
 function handleWindowScopedShortcut(input) {
@@ -572,6 +715,7 @@ function showPasteInputBlocker() {
   const display = screen.getDisplayMatching(mainWindow.getBounds());
   const bounds = display.bounds || mainWindow.getBounds();
   pasteBlockerWindow = new BrowserWindow({
+    ...parentedPopupOptions({ modal: false }),
     x: bounds.x,
     y: bounds.y,
     width: bounds.width,
@@ -589,6 +733,7 @@ function showPasteInputBlocker() {
       contextIsolation: true,
     },
   });
+  keepPopupWithFullscreenParent(pasteBlockerWindow);
   pasteBlockerWindow.setAlwaysOnTop(true, 'screen-saver');
 
   pasteBlockerWindow.loadURL(
@@ -705,8 +850,7 @@ function createUrlDialog() {
     width: 540,
     height: 520,
     resizable: false,
-    frame: false,
-    alwaysOnTop: true,
+    ...operatorWindowChromeOptions(),
     icon: ICON,
     webPreferences: {
       nodeIntegration: true,
@@ -744,13 +888,10 @@ function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
   });
   activePartition = partitionForProfile(activeProfileKey);
   setupSession(activePartition);
-
-  const { x, y } = targetDisplay ? targetDisplay.bounds : { x: 0, y: 0 };
+  mainWindowUsesMacSimpleFullscreen = isMacPlatform() && Boolean(fullscreen);
 
   mainWindow = new BrowserWindow({
-    x,
-    y,
-    fullscreen: fullscreen,
+    ...mainWindowDisplayOptions(targetDisplay, fullscreen),
     kiosk: false,
     icon: ICON,
     webPreferences: {
@@ -865,9 +1006,13 @@ function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
     event.preventDefault();
   });
 
+  const createdMainWindow = mainWindow;
   mainWindow.on('closed', () => {
     closePasteInputBlocker();
-    mainWindow = null;
+    if (mainWindow === createdMainWindow) {
+      mainWindowUsesMacSimpleFullscreen = false;
+      mainWindow = null;
+    }
   });
 }
 
@@ -876,18 +1021,19 @@ function createNavDialog() {
 
   const { x, y } = dialogPosition(400, 590);
   navDialogWindow = new BrowserWindow({
+    ...parentedPopupOptions(),
     x, y,
     width: 400,
     height: 590,
     resizable: false,
-    frame: false,
-    alwaysOnTop: true,
+    ...operatorWindowChromeOptions(),
     icon: ICON,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
+  keepPopupWithFullscreenParent(navDialogWindow);
   attachWindowScopedShortcuts(navDialogWindow);
   navDialogWindow.loadFile(path.join(__dirname, 'nav-dialog.html'));
   navDialogWindow.on('closed', () => { navDialogWindow = null; });
@@ -901,18 +1047,19 @@ function createResolutionDialog() {
 
   const { x, y } = dialogPosition(480, 430);
   resolutionDialogWindow = new BrowserWindow({
+    ...parentedPopupOptions(),
     x, y,
     width: 480,
     height: 430,
     resizable: false,
-    frame: false,
-    alwaysOnTop: true,
+    ...operatorWindowChromeOptions(),
     icon: ICON,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
+  keepPopupWithFullscreenParent(resolutionDialogWindow);
   attachWindowScopedShortcuts(resolutionDialogWindow);
   resolutionDialogWindow.loadFile(path.join(__dirname, 'resolution-dialog.html'));
   resolutionDialogWindow.webContents.on('did-finish-load', () => {
@@ -933,19 +1080,20 @@ function createPasteDialog(initialText = '', source = 'manual') {
 
   const { x, y, width, height } = dialogBounds(620, 620, 520, 500);
   pasteDialogWindow = new BrowserWindow({
+    ...parentedPopupOptions(),
     x, y,
     width,
     height,
     resizable: false,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
+    transparent: !isMacPlatform(),
+    ...operatorWindowChromeOptions(),
     icon: ICON,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
+  keepPopupWithFullscreenParent(pasteDialogWindow);
   attachWindowScopedShortcuts(pasteDialogWindow);
   pasteDialogWindow.loadFile(path.join(__dirname, 'paste-dialog.html'));
   pasteDialogWindow.webContents.on('did-finish-load', () => {
@@ -986,18 +1134,19 @@ function createCredentialDialog(credential, mode) {
 
   const { x, y } = dialogPosition(500, 390);
   credentialDialogWindow = new BrowserWindow({
+    ...parentedPopupOptions(),
     x, y,
     width: 500,
     height: 390,
     resizable: false,
-    frame: false,
-    alwaysOnTop: true,
+    ...operatorWindowChromeOptions(),
     icon: ICON,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
+  keepPopupWithFullscreenParent(credentialDialogWindow);
   attachWindowScopedShortcuts(credentialDialogWindow);
   credentialDialogWindow.loadFile(path.join(__dirname, 'credential-dialog.html'));
   credentialDialogWindow.webContents.on('did-finish-load', () => {
@@ -1030,18 +1179,19 @@ function createIframeDialog(iframeUrl) {
 
   const { x, y } = dialogPosition(460, 280);
   iframeDialogWindow = new BrowserWindow({
+    ...parentedPopupOptions(),
     x, y,
     width: 460,
     height: 280,
     resizable: false,
-    frame: false,
-    alwaysOnTop: true,
+    ...operatorWindowChromeOptions(),
     icon: ICON,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
+  keepPopupWithFullscreenParent(iframeDialogWindow);
   attachWindowScopedShortcuts(iframeDialogWindow);
   iframeDialogWindow.loadFile(
     path.join(__dirname, 'iframe-dialog.html')
@@ -1166,16 +1316,22 @@ ipcMain.on('iframe-action', (_event, action) => {
 
 ipcMain.on('resolution-action', (_event, payload) => {
   const action = payload && payload.action;
+  let shouldReloadMainWindow = false;
 
   if (action === 'save') {
     setActiveResolutionSetting(
       payload.setting,
       currentResolutionDisplayBounds()
     );
+    shouldReloadMainWindow = Boolean(mainWindow && !mainWindow.isDestroyed());
   }
 
   if (resolutionDialogWindow && !resolutionDialogWindow.isDestroyed()) {
     resolutionDialogWindow.close();
+  }
+
+  if (shouldReloadMainWindow) {
+    recreateMainWindowForResolutionChange();
   }
 });
 
@@ -1399,8 +1555,12 @@ ipcMain.on('credential-mfa-secret-changed', (_event, value) => {
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
-  Menu.setApplicationMenu(null); // remove File/Edit/View menu bar from all windows
+  installApplicationMenu();
   createUrlDialog();
+});
+
+app.on('activate', () => {
+  focusPrimaryWindow();
 });
 
 app.on('before-quit', async () => {

@@ -191,36 +191,60 @@ function remoteResolutionPatchSource(resolutionText) {
         }
       }
 
-      function preserveStoredLunaResolution(serializedSetting) {
-        if (!window.__jpRemoteResolution || typeof serializedSetting !== 'string') {
+      function lunaResolutionValue() {
+        return window.__jpRemoteResolution || 'Auto';
+      }
+
+      function forceLunaSettingResolution(setting) {
+        if (!isObject(setting) || Array.isArray(setting)) return false;
+
+        if (!isObject(setting.graphics) || Array.isArray(setting.graphics)) {
+          setting.graphics = {};
+        }
+
+        var nextResolution = lunaResolutionValue();
+        if (setting.graphics.rdp_resolution === nextResolution) return false;
+
+        setting.graphics.rdp_resolution = nextResolution;
+        return true;
+      }
+
+      function forceSerializedLunaResolution(serializedSetting) {
+        if (typeof serializedSetting !== 'string') {
           return serializedSetting;
         }
 
         try {
           var nextSetting = nativeJsonParse(serializedSetting);
-          if (!isObject(nextSetting) || !isObject(nextSetting.graphics)) {
-            return serializedSetting;
-          }
-
-          var currentRaw = nativeStorageGetItem
-            ? nativeStorageGetItem.call(window.localStorage, 'LunaSetting')
-            : null;
-          var currentSetting = currentRaw ? nativeJsonParse(currentRaw) : null;
-          if (isObject(currentSetting) && isObject(currentSetting.graphics) &&
-              hasOwn(currentSetting.graphics, 'rdp_resolution')) {
-            nextSetting.graphics.rdp_resolution = currentSetting.graphics.rdp_resolution;
-          } else {
-            delete nextSetting.graphics.rdp_resolution;
-          }
-          return nativeJsonStringify(nextSetting);
+          return forceLunaSettingResolution(nextSetting)
+            ? nativeJsonStringify(nextSetting)
+            : serializedSetting;
         } catch (_err) {
           return serializedSetting;
         }
       }
 
+      function syncStoredLunaSettingResolution() {
+        if (!nativeStorageGetItem || !nativeStorageSetItem || !window.localStorage) return;
+
+        try {
+          var currentRaw = nativeStorageGetItem.call(window.localStorage, 'LunaSetting');
+          var currentSetting = currentRaw ? nativeJsonParse(currentRaw) : {};
+          if (forceLunaSettingResolution(currentSetting)) {
+            nativeStorageSetItem.call(
+              window.localStorage,
+              'LunaSetting',
+              nativeJsonStringify(currentSetting)
+            );
+            debugLog('synced LunaSetting stored resolution=' + lunaResolutionValue());
+          }
+        } catch (_err) {}
+      }
+
       function setResolution(value) {
         window.__jpRemoteResolution = typeof value === 'string' ? value : '';
         debugLog('page resolution=' + (window.__jpRemoteResolution || '(auto)'));
+        syncStoredLunaSettingResolution();
       }
 
       function isConnectionTokenUrl(rawUrl) {
@@ -593,8 +617,8 @@ function remoteResolutionPatchSource(resolutionText) {
             if (key === 'LunaSetting' && typeof value === 'string') {
               try {
                 var setting = nativeJsonParse(value);
-                if (forceResolutionValue(setting, [])) {
-                  debugLog('patched LunaSetting read resolution=' + window.__jpRemoteResolution);
+                if (forceLunaSettingResolution(setting) || forceResolutionValue(setting, [])) {
+                  debugLog('patched LunaSetting read resolution=' + lunaResolutionValue());
                   return nativeJsonStringify(setting);
                 }
               } catch (_err) {}
@@ -604,7 +628,7 @@ function remoteResolutionPatchSource(resolutionText) {
 
           window.Storage.prototype.setItem = function(key, value) {
             if (key === 'LunaSetting' && typeof value === 'string') {
-              value = preserveStoredLunaResolution(value);
+              value = forceSerializedLunaResolution(value);
             }
             return nativeStorageSetItem.call(this, key, value);
           };

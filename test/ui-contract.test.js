@@ -89,8 +89,48 @@ test('main process keeps shortcuts window-scoped for multi-instance use', () => 
   const main = readProjectFile('main.js');
 
   assert.doesNotMatch(main, /globalShortcut/);
+  assert.match(main, /require\('\.\/window-shortcuts'\)/);
   assert.match(main, /handleWindowScopedShortcut/);
   assert.match(main, /before-input-event/);
+});
+
+test('main process uses native macOS fullscreen and work-area windowing', () => {
+  const main = readProjectFile('main.js');
+
+  assert.doesNotMatch(main, /simpleFullscreen\s*=\s*true/);
+  assert.doesNotMatch(main, /setVisibleOnAllWorkspaces\(true,\s*\{\s*visibleOnFullScreen:\s*true\s*\}/);
+  assert.match(main, /if \(isMacPlatform\(\)\) \{/);
+  assert.match(main, /display\.workArea/);
+  assert.match(main, /fullscreen:\s*Boolean\(fullscreen\)/);
+  assert.match(main, /parentedPopupOptions/);
+  assert.match(main, /parent:\s*mainWindow/);
+  assert.match(main, /modal:\s*options\.modal !== false/);
+  assert.match(main, /parentedPopupOptions\(\{ modal: false \}\)/);
+});
+
+test('main process gives macOS operator dialogs normal window chrome', () => {
+  const main = readProjectFile('main.js');
+  const operatorChromeUses = main.match(/\.\.\.operatorWindowChromeOptions\(\)/g) || [];
+
+  assert.match(main, /function operatorWindowChromeOptions\(\)/);
+  assert.match(main, /frame:\s*true/);
+  assert.match(main, /alwaysOnTop:\s*false/);
+  assert.match(main, /fullscreenable:\s*false/);
+  assert.match(main, /useContentSize:\s*true/);
+  assert.match(main, /transparent:\s*!isMacPlatform\(\)/);
+  assert.ok(operatorChromeUses.length >= 6);
+});
+
+test('main process keeps macOS app visible and quit-capable', () => {
+  const main = readProjectFile('main.js');
+  const packageJson = JSON.parse(readProjectFile('package.json'));
+
+  assert.match(main, /function installApplicationMenu\(\)/);
+  assert.match(main, /if \(isMacPlatform\(\)\) \{\s*return;\s*\}/);
+  assert.match(main, /app\.on\('activate'/);
+  assert.match(main, /focusPrimaryWindow/);
+  assert.equal(packageJson.build && packageJson.build.productName, 'JP Entry');
+  assert.equal(packageJson.build && packageJson.build.mac && packageJson.build.mac.icon, 'icon.png');
 });
 
 test('preload stays compatible with sandboxed renderer windows', () => {
@@ -114,9 +154,20 @@ test('preload overrides Luna resolution before connection token creation', () =>
   assert.match(preload, /LunaSetting/);
   assert.match(preload, /rdp_resolution/);
   assert.match(preload, /connect_options/);
+  assert.match(preload, /forceLunaSettingResolution/);
+  assert.match(preload, /syncStoredLunaSettingResolution/);
   assert.match(preload, /JSON\.parse = function/);
   assert.match(preload, /JSON\.stringify = function/);
   assert.match(preload, /Object\.assign = function/);
+});
+
+test('saving remote resolution rebuilds the active Luna window', () => {
+  const main = readProjectFile('main.js');
+
+  assert.match(main, /recreateMainWindowForResolutionChange/);
+  assert.match(main, /isFullscreenLikeWindow/);
+  assert.match(main, /createMainWindow\(nextUrl \|\| rootUrl,\s*targetDisplay,\s*fullscreen\)/);
+  assert.match(main, /shouldReloadMainWindow/);
 });
 
 test('preload forces legacy Guacamole connect and resize dimensions', () => {
@@ -135,6 +186,7 @@ test('preload forces legacy Guacamole connect and resize dimensions', () => {
 test('packaged build includes every local runtime module used by main process', () => {
   const packageJson = JSON.parse(readProjectFile('package.json'));
   const files = packageJson.build && packageJson.build.files;
+  const mac = packageJson.build && packageJson.build.mac;
 
   assert.ok(Array.isArray(files));
   assert.ok(files.includes('main.js'));
@@ -144,4 +196,8 @@ test('packaged build includes every local runtime module used by main process', 
   assert.ok(files.includes('instance-profile.js'));
   assert.ok(files.includes('navigation-history.js'));
   assert.ok(files.includes('resolution-settings.js'));
+  assert.ok(files.includes('window-shortcuts.js'));
+  assert.ok(files.includes('icon.png'));
+  assert.equal(mac && mac.extendInfo && mac.extendInfo.LSUIElement, false);
+  assert.equal(mac && mac.extendInfo && mac.extendInfo.LSBackgroundOnly, false);
 });
