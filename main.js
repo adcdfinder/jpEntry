@@ -44,7 +44,6 @@ const credentialStore = createCredentialStore({
 const {
   canStoreCredentials,
   getCredential,
-  getCredentialRecord,
   saveCredential,
   deleteAllCredentials,
   shouldPromptForCredential,
@@ -696,9 +695,9 @@ function createCredentialDialog(credential, mode) {
     credentialDialogWindow.close();
   }
 
-  const existingRecord = getCredentialRecord(credential.origin);
+  const existingCredential = getCredential(credential.origin);
   const mfaSecret = credential.mfaSecret ||
-    (existingRecord && existingRecord.mfaSecret) ||
+    (existingCredential && existingCredential.mfaSecret) ||
     '';
   pendingCredential = {
     origin: credential.origin,

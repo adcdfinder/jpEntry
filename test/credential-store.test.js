@@ -98,7 +98,8 @@ test('saves encrypted credentials and reads decrypted credentials back', () => {
   const record = rawStore.credentials['http://192.168.88.250:8080'];
   assert.equal(record.username, 'admin');
   assert.equal(record.password, Buffer.from('encrypted:secret-password').toString('base64'));
-  assert.equal(record.mfaSecret, 'JBSWY3DPEHPK3PXP');
+  assert.equal(record.mfaSecret, Buffer.from('encrypted:JBSWY3DPEHPK3PXP').toString('base64'));
+  assert.notEqual(record.mfaSecret, 'JBSWY3DPEHPK3PXP');
   assert.equal(record.createdAt, '2026-05-18T00:00:00.000Z');
 
   assert.deepEqual(store.getCredential('http://192.168.88.250:8080/any/path'), {
@@ -108,6 +109,41 @@ test('saves encrypted credentials and reads decrypted credentials back', () => {
     mfaSecret: 'JBSWY3DPEHPK3PXP',
     updatedAt: '2026-05-18T00:00:00.000Z',
   });
+});
+
+test('migrates legacy plaintext MFA secrets to encrypted storage when read', () => {
+  const fs = createMemoryFs();
+  const safeStorage = createSafeStorage();
+  const store = createTestStore({ fs, safeStorage });
+  const origin = 'http://192.168.88.250:8080';
+
+  fs.files.set(store.credentialsFilePath(), JSON.stringify({
+    version: 1,
+    credentials: {
+      [origin]: {
+        username: 'admin',
+        password: safeStorage.encryptString('secret-password').toString('base64'),
+        mfaSecret: 'JBSWY3DPEHPK3PXP',
+        createdAt: '2026-05-18T00:00:00.000Z',
+        updatedAt: '2026-05-18T00:00:00.000Z',
+      },
+    },
+  }));
+
+  assert.deepEqual(store.getCredential('http://192.168.88.250:8080/any/path'), {
+    origin,
+    username: 'admin',
+    password: 'secret-password',
+    mfaSecret: 'JBSWY3DPEHPK3PXP',
+    updatedAt: '2026-05-18T00:00:00.000Z',
+  });
+
+  const migratedStore = JSON.parse(fs.files.get(store.credentialsFilePath()));
+  const migratedRecord = migratedStore.credentials[origin];
+  assert.equal(
+    migratedRecord.mfaSecret,
+    Buffer.from('encrypted:JBSWY3DPEHPK3PXP').toString('base64')
+  );
 });
 
 test('rejects saves when encryption or MFA secret validation is unavailable', () => {
