@@ -87,24 +87,57 @@ function createCredentialStore(options = {}) {
     }
   }
 
-  function encryptPassword(password) {
+  function encryptSecret(value) {
     if (!canStoreCredentials()) return null;
 
     try {
-      return safeStorage.encryptString(String(password || '')).toString('base64');
+      return safeStorage.encryptString(String(value || '')).toString('base64');
     } catch (_err) {
       return null;
     }
   }
 
-  function decryptPassword(encryptedPassword) {
-    if (!encryptedPassword || !canStoreCredentials()) return null;
+  function decryptSecret(encryptedValue) {
+    if (!encryptedValue || !canStoreCredentials()) return null;
 
     try {
-      return safeStorage.decryptString(Buffer.from(encryptedPassword, 'base64'));
+      return safeStorage.decryptString(Buffer.from(encryptedValue, 'base64'));
     } catch (_err) {
       return null;
     }
+  }
+
+  function encryptPassword(password) {
+    return encryptSecret(password);
+  }
+
+  function decryptPassword(encryptedPassword) {
+    return decryptSecret(encryptedPassword);
+  }
+
+  function encryptMfaSecret(mfaSecret) {
+    return encryptSecret(mfaSecret);
+  }
+
+  function decryptMfaSecret(record) {
+    if (!record || !record.mfaSecret) return '';
+
+    const decrypted = decryptSecret(record.mfaSecret);
+    if (decrypted != null) return normalizeMfaSecret(decrypted);
+
+    const legacyPlaintext = normalizeMfaSecret(record.mfaSecret);
+    return isValidMfaSecret(legacyPlaintext) ? legacyPlaintext : '';
+  }
+
+  function migrateLegacyMfaSecret(origin, store, record, mfaSecret) {
+    if (!origin || !store || !record || !mfaSecret) return;
+    if (decryptSecret(record.mfaSecret) != null) return;
+
+    const encryptedMfaSecret = encryptMfaSecret(mfaSecret);
+    if (!encryptedMfaSecret) return;
+
+    record.mfaSecret = encryptedMfaSecret;
+    writeCredentialStore(store);
   }
 
   function getCredential(origin) {
@@ -117,12 +150,16 @@ function createCredentialStore(options = {}) {
 
     const password = decryptPassword(record.password);
     if (password == null) return null;
+    const mfaSecret = decryptMfaSecret(record);
+    if (record.mfaSecret && mfaSecret) {
+      migrateLegacyMfaSecret(normalizedOrigin, store, record, mfaSecret);
+    }
 
     return {
       origin: normalizedOrigin,
       username: record.username || '',
       password,
-      mfaSecret: record.mfaSecret || '',
+      mfaSecret,
       updatedAt: record.updatedAt || null,
     };
   }
@@ -148,7 +185,8 @@ function createCredentialStore(options = {}) {
     if (!mfaSecret || !isValidMfaSecret(mfaSecret)) return false;
 
     const encryptedPassword = encryptPassword(password);
-    if (!encryptedPassword) return false;
+    const encryptedMfaSecret = encryptMfaSecret(mfaSecret);
+    if (!encryptedPassword || !encryptedMfaSecret) return false;
 
     const store = readCredentialStore();
     const existing = store.credentials[origin];
@@ -156,7 +194,7 @@ function createCredentialStore(options = {}) {
     store.credentials[origin] = {
       username: String((credential && credential.username) || ''),
       password: encryptedPassword,
-      mfaSecret,
+      mfaSecret: encryptedMfaSecret,
       createdAt: existing && existing.createdAt ? existing.createdAt : timestamp,
       updatedAt: timestamp,
     };
@@ -201,8 +239,12 @@ function createCredentialStore(options = {}) {
     readCredentialStore,
     writeCredentialStore,
     canStoreCredentials,
+    encryptSecret,
+    decryptSecret,
     encryptPassword,
     decryptPassword,
+    encryptMfaSecret,
+    decryptMfaSecret,
     getCredential,
     getCredentialRecord,
     isValidMfaSecret,
