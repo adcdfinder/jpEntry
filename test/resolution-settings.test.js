@@ -6,6 +6,7 @@ const {
   effectiveResolution,
   formatResolution,
   isConnectionTokenUrl,
+  isGuacamoleClientUrl,
   normalizeResolutionSetting,
   resolutionOverrideFromSetting,
   withResolutionConnectOption,
@@ -72,5 +73,20 @@ test('patches JumpServer connection token bodies with a custom resolution', () =
   assert.equal(
     isConnectionTokenUrl('/api/v1/authentication/admin-connection-token/', 'https://jump.example'),
     true
+  );
+  assert.equal(
+    isConnectionTokenUrl('/guacamole/api/tokens', 'https://jump.example'),
+    true
+  );
+});
+
+test('detects active Guacamole client pages that reuse an existing token', () => {
+  assert.equal(
+    isGuacamoleClientUrl('https://jump.example/guacamole/#/client/abc?token=old'),
+    true
+  );
+  assert.equal(
+    isGuacamoleClientUrl('https://jump.example/luna/#/assets'),
+    false
   );
 });

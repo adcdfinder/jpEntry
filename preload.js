@@ -108,6 +108,31 @@ function remoteResolutionPatchSource(resolutionText) {
         };
       }
 
+      function setSearchParam(params, key, value) {
+        if (params && typeof params.set === 'function') {
+          params.set(key, String(value));
+        }
+      }
+
+      function applyResolutionParams(params, includeLegacyNames) {
+        var resolution = resolutionParts();
+        if (!resolution || !params || typeof params.set !== 'function') return false;
+
+        setSearchParam(params, 'resolution', resolution.text);
+        setSearchParam(params, 'GUAC_WIDTH', resolution.width);
+        setSearchParam(params, 'GUAC_HEIGHT', resolution.height);
+        setSearchParam(params, 'width', resolution.width);
+        setSearchParam(params, 'height', resolution.height);
+        setSearchParam(params, 'GUAC_DPI', '96');
+
+        if (includeLegacyNames) {
+          setSearchParam(params, 'rdp_resolution', resolution.text);
+          setSearchParam(params, 'TERMINAL_GRAPHICAL_RESOLUTION', resolution.text);
+        }
+
+        return true;
+      }
+
       function isObject(value) {
         return value && typeof value === 'object';
       }
@@ -250,7 +275,17 @@ function remoteResolutionPatchSource(resolutionText) {
       function isConnectionTokenUrl(rawUrl) {
         try {
           var url = new URL(rawUrl, window.location.href);
-          return /\\/api\\/v1\\/authentication\\/(?:admin-)?connection-token\\/?$/i.test(url.pathname);
+          return /\\/api\\/v1\\/authentication\\/(?:admin-)?connection-token\\/?$/i.test(url.pathname) ||
+            /\\/guacamole\\/api\\/tokens(?:\\/[^/]+)?\\/?$/i.test(url.pathname);
+        } catch (_err) {
+          return false;
+        }
+      }
+
+      function isLegacyAssetAddUrl(rawUrl) {
+        try {
+          var url = new URL(rawUrl, window.location.href);
+          return /\\/guacamole\\/api\\/session\\/ext\\/jumpserver\\/asset\\/add\\/?$/i.test(url.pathname);
         } catch (_err) {
           return false;
         }
@@ -259,10 +294,39 @@ function remoteResolutionPatchSource(resolutionText) {
       function shouldPatch(rawUrl, method) {
         if (!window.__jpRemoteResolution) return false;
         if (method && String(method).toUpperCase() !== 'POST') return false;
-        return isConnectionTokenUrl(rawUrl);
+        return isConnectionTokenUrl(rawUrl) || isLegacyAssetAddUrl(rawUrl);
       }
 
-      function patchBody(body) {
+      function patchRequestUrl(rawUrl, method) {
+        if (!window.__jpRemoteResolution) return rawUrl;
+        if (method && String(method).toUpperCase() !== 'POST') return rawUrl;
+        if (!isLegacyAssetAddUrl(rawUrl)) return rawUrl;
+
+        try {
+          var url = new URL(rawUrl, window.location.href);
+          applyResolutionParams(url.searchParams, true);
+          return url.toString();
+        } catch (_err) {
+          return rawUrl;
+        }
+      }
+
+      function patchTokenFormBody(body, rawUrl) {
+        if (typeof body !== 'string' || body.indexOf('=') === -1) {
+          return null;
+        }
+
+        try {
+          var params = new URLSearchParams(body);
+          if (!Array.from(params.keys()).length) return null;
+          if (!applyResolutionParams(params, isLegacyAssetAddUrl(rawUrl))) return null;
+          return params.toString();
+        } catch (_err) {
+          return null;
+        }
+      }
+
+      function patchBody(body, rawUrl) {
         if (!window.__jpRemoteResolution) return body;
 
         if (typeof body !== 'string') {
@@ -283,7 +347,7 @@ function remoteResolutionPatchSource(resolutionText) {
           forceResolutionValue(data, []);
           return nativeJsonStringify(data);
         } catch (_err) {
-          return body;
+          return patchTokenFormBody(body, rawUrl) || body;
         }
       }
 
@@ -637,21 +701,37 @@ function remoteResolutionPatchSource(resolutionText) {
         var nativeFetch = window.fetch;
         if (typeof nativeFetch === 'function') {
           window.fetch = function(input, init) {
-            var requestUrl = typeof input === 'string' ? input : input && input.url;
+            var requestUrl = typeof input === 'string' ? input : input && (input.url || input.href);
             var method = init && init.method ? init.method : input && input.method;
+            var nextRequestUrl = patchRequestUrl(requestUrl, method);
+
+            if (nextRequestUrl && nextRequestUrl !== requestUrl) {
+              if (typeof input === 'string' || input && input.href) {
+                input = nextRequestUrl;
+              } else if (input && typeof Request === 'function' && input instanceof Request) {
+                input = new Request(nextRequestUrl, input);
+              }
+              requestUrl = nextRequestUrl;
+            }
 
             if (init && shouldPatch(requestUrl, method) && typeof init.body === 'string') {
-              init = Object.assign({}, init, { body: patchBody(init.body) });
+              init = Object.assign({}, init, { body: patchBody(init.body, requestUrl) });
               debugLog('patched fetch token body resolution=' + window.__jpRemoteResolution);
             } else if (init && shouldPatch(requestUrl, method) && init.body) {
-              init = Object.assign({}, init, { body: patchBody(init.body) });
+              init = Object.assign({}, init, { body: patchBody(init.body, requestUrl) });
               debugLog('patched fetch token object body resolution=' + window.__jpRemoteResolution);
-            } else if (!init && input && typeof input.clone === 'function' && shouldPatch(requestUrl, method)) {
+            } else if (
+              !init &&
+              input &&
+              typeof input.clone === 'function' &&
+              shouldPatch(requestUrl, method) &&
+              !isLegacyAssetAddUrl(requestUrl)
+            ) {
               return input.clone().text().then(function(body) {
                 var nextInit = {
                   method: input.method,
                   headers: input.headers,
-                  body: patchBody(body),
+                  body: patchBody(body, requestUrl),
                   credentials: input.credentials,
                   cache: input.cache,
                   redirect: input.redirect,
@@ -676,14 +756,20 @@ function remoteResolutionPatchSource(resolutionText) {
         var nativeSend = window.XMLHttpRequest && window.XMLHttpRequest.prototype.send;
         if (nativeOpen && nativeSend) {
           window.XMLHttpRequest.prototype.open = function(method, url) {
+            var nextUrl = patchRequestUrl(url, method);
             this.__jpRequestMethod = method;
-            this.__jpRequestUrl = url;
+            this.__jpRequestUrl = nextUrl;
+            if (nextUrl && nextUrl !== url) {
+              var args = Array.prototype.slice.call(arguments);
+              args[1] = nextUrl;
+              return nativeOpen.apply(this, args);
+            }
             return nativeOpen.apply(this, arguments);
           };
 
           window.XMLHttpRequest.prototype.send = function(body) {
             if (shouldPatch(this.__jpRequestUrl, this.__jpRequestMethod)) {
-              body = patchBody(body);
+              body = patchBody(body, this.__jpRequestUrl);
               debugLog('patched xhr token body resolution=' + window.__jpRemoteResolution);
             }
             return nativeSend.call(this, body);

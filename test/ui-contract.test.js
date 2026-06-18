@@ -154,6 +154,11 @@ test('preload overrides Luna resolution before connection token creation', () =>
   assert.match(preload, /LunaSetting/);
   assert.match(preload, /rdp_resolution/);
   assert.match(preload, /connect_options/);
+  assert.match(preload, /patchTokenFormBody/);
+  assert.match(preload, /patchRequestUrl/);
+  assert.match(preload, /guacamole.*api.*tokens/);
+  assert.match(preload, /asset.*add/);
+  assert.match(preload, /TERMINAL_GRAPHICAL_RESOLUTION/);
   assert.match(preload, /forceLunaSettingResolution/);
   assert.match(preload, /syncStoredLunaSettingResolution/);
   assert.match(preload, /JSON\.parse = function/);
@@ -166,6 +171,8 @@ test('saving remote resolution rebuilds the active Luna window', () => {
 
   assert.match(main, /recreateMainWindowForResolutionChange/);
   assert.match(main, /isFullscreenLikeWindow/);
+  assert.match(main, /isGuacamoleClientUrl/);
+  assert.match(main, /requiresFreshConnection/);
   assert.match(main, /createMainWindow\(nextUrl \|\| rootUrl,\s*targetDisplay,\s*fullscreen\)/);
   assert.match(main, /shouldReloadMainWindow/);
 });

@@ -126,7 +126,18 @@ function applyResolutionToGuacamoleUrl(rawUrl, resolution) {
 function isConnectionTokenUrl(rawUrl, baseUrl) {
   try {
     const url = baseUrl ? new URL(rawUrl, baseUrl) : new URL(rawUrl);
-    return /\/api\/v1\/authentication\/(?:admin-)?connection-token\/?$/i.test(url.pathname);
+    return /\/api\/v1\/authentication\/(?:admin-)?connection-token\/?$/i.test(url.pathname) ||
+      /\/guacamole\/api\/tokens(?:\/[^/]+)?\/?$/i.test(url.pathname);
+  } catch (_err) {
+    return false;
+  }
+}
+
+function isGuacamoleClientUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return /\/guacamole\/?$/i.test(url.pathname) &&
+      /^#\/client\//i.test(url.hash);
   } catch (_err) {
     return false;
   }
@@ -177,6 +188,7 @@ module.exports = {
   effectiveResolution,
   formatResolution,
   isConnectionTokenUrl,
+  isGuacamoleClientUrl,
   isLionConnectWebSocketUrl,
   isValidResolution,
   normalizeResolutionSetting,

@@ -38,6 +38,7 @@ const {
   PRESET_RESOLUTIONS,
   applyResolutionToGuacamoleUrl,
   isConnectionTokenUrl,
+  isGuacamoleClientUrl,
   isLionConnectWebSocketUrl,
   normalizeResolutionSetting,
   resolutionLabel,
@@ -424,13 +425,16 @@ function recreateMainWindowForResolutionChange() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
   const previousWindow = mainWindow;
-  const nextUrl = normalizeNavigationUrl(previousWindow.webContents.getURL()) ||
-    rootUrl;
+  const currentUrl = normalizeNavigationUrl(previousWindow.webContents.getURL());
+  const requiresFreshConnection = isGuacamoleClientUrl(currentUrl);
+  const nextUrl = requiresFreshConnection ? rootUrl : (currentUrl || rootUrl);
   const targetDisplay = screen.getDisplayMatching(previousWindow.getBounds());
   const fullscreen = isFullscreenLikeWindow(previousWindow);
 
   resolutionDebugLog('recreate main window for resolution change', {
+    currentUrl,
     url: nextUrl,
+    requiresFreshConnection,
     fullscreen,
     override: activeResolutionOverrideText() || '(auto)',
   });
