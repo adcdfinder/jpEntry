@@ -19,21 +19,36 @@ As you can see, the application is all generated with AI. The initial requiremen
 | **MFA OTP autofill** | Autofills saved MFA tokens on Red Zone and Yellow Zone OTP login pages |
 | **New-window redirect** | All `target="_blank"` links and `window.open()` calls load inside the main window |
 | **iframe detection** | When a page embeds an iframe, a popup asks whether to navigate to the iframe URL in the main window |
-| **No menu bar** | File / Edit / View menu is removed from all windows |
+| **Minimal app chrome** | Windows / Linux remove the application menu; macOS keeps the native app menu for Quit / Force Quit affordances |
 | **GPU acceleration** | Chromium GPU rasterization flags enabled for smoother rendering on Windows |
 
 ---
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|---|---|
-| `Ctrl+Alt+H` | Open navigation popup |
-| `Ctrl+Alt+V` | Open clipboard paste confirmation |
+| Windows / Linux | macOS | Action |
+|---|---|---|
+| `Ctrl+Alt+H` | `Control+Option+H` or `Command+Option+H` | Open navigation popup |
+| `Ctrl+Alt+V` | `Control+Option+V` or `Command+Option+V` | Open clipboard paste confirmation |
+| `Ctrl+Alt+Shift+Q` | `Control+Option+Shift+Q` or `Command+Option+Shift+Q` | Close the application, or cancel an active paste operation |
 
 Shortcuts are window-scoped rather than OS-global. When multiple JP Entry
 instances are open, the focused/fullscreen instance receives the shortcut and
-other instances are left alone.
+other instances are left alone. Letter shortcuts are matched by physical key
+code so macOS Option-key text composition does not change the shortcut.
+
+On macOS, JP Entry uses the native fullscreen Space when fullscreen is enabled,
+so moving the pointer to the top edge reveals the standard macOS window controls.
+When fullscreen is disabled, the main window uses the display work area so it
+does not extend under the Dock. Operator popups are parented modal windows so
+navigation, paste, credential, iframe, and resolution dialogs stay attached to
+the kiosk page.
+JP Entry also keeps the native macOS application menu with Quit and ships bundle
+metadata plus an app icon as a normal foreground app so packaged builds appear
+in Cmd-Tab, the Dock, and Force Quit.
+Operator dialogs use normal macOS window chrome instead of frameless always-on-top
+windows, so a stuck URL, navigation, paste, credential, iframe, or resolution
+dialog can be closed or switched away from like an ordinary app window.
 
 ### Navigation Popup Options
 
@@ -46,10 +61,10 @@ other instances are left alone.
 
 ### Paste Dialog
 
-Open via `Ctrl+Alt+V` or the **Paste Text** button in the navigation popup:
+Open via `Ctrl+Alt+V`, `Command+Option+V` on macOS, or the **Paste Text** button in the navigation popup:
 
 1. Focus an input field on the web page
-2. Press `Ctrl+Alt+V` directly, or press `Ctrl+Alt+H` and click **Paste Text**
+2. Press the paste shortcut directly, or press the navigation shortcut and click **Paste Text**
 3. Type or paste your text into the dialog
 4. Click **Apply** (or press `Ctrl+Enter`) — the text is injected into the previously focused input
 5. Click **Cancel** to discard
@@ -136,8 +151,12 @@ If `electron-builder` cannot download its binaries automatically:
 ### `main.js` — Main Process
 
 - Creates the **URL dialog** window on startup (non-kiosk, always-on-top)
-- After URL is submitted via IPC, creates the **main kiosk window** (`kiosk: true`, `fullscreen: true`)
-- Handles window-scoped shortcuts (`Ctrl+Alt+H`, `Ctrl+Alt+V`, `Ctrl+Alt+Shift+Q`) on the focused instance
+- After URL is submitted via IPC, creates the **main kiosk window** in fullscreen by default
+- Uses native macOS fullscreen when requested, and a Dock-safe work-area window when fullscreen is disabled
+- Parents macOS operator dialogs as modal windows so they stay attached to the kiosk page
+- Keeps macOS visible in Dock / Cmd-Tab / Force Quit with foreground app bundle metadata, an app icon, and the native app menu
+- Gives macOS operator dialogs standard window controls instead of frameless always-on-top chrome
+- Handles window-scoped shortcuts (`Ctrl+Alt` on Windows/Linux, `Control+Option` or `Command+Option` on macOS) on the focused instance
 - Handles `setWindowOpenHandler` to redirect all new-window requests into the main window
 - Manages an **iframe queue** — when multiple iframes are detected simultaneously, dialogs are shown sequentially
 - Red and Yellow sessions use separate persistent partitions (`persist:kiosk-red` and `persist:kiosk-yellow`)

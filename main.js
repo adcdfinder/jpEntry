@@ -12,6 +12,7 @@ const {
   dialog,
 } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { authenticator } = require('otplib');
 const {
   createCredentialStore,
@@ -25,6 +26,25 @@ const {
   partitionForProfile,
   profileKeyForKiosk,
 } = require('./instance-profile');
+const {
+  isShortcutKey,
+} = require('./window-shortcuts');
+const {
+  DEFAULT_RESOLUTION_SETTING,
+  MAX_HEIGHT,
+  MAX_WIDTH,
+  MIN_HEIGHT,
+  MIN_WIDTH,
+  PRESET_RESOLUTIONS,
+  applyResolutionToGuacamoleUrl,
+  isConnectionTokenUrl,
+  isGuacamoleClientUrl,
+  isLionConnectPageUrl,
+  isLionConnectWebSocketUrl,
+  normalizeResolutionSetting,
+  resolutionLabel,
+  resolutionOverrideFromSetting,
+} = require('./resolution-settings');
 
 const {
   DEFAULT_KIOSK_ZONE,
@@ -72,7 +92,8 @@ app.commandLine.appendSwitch('ignore-gpu-blocklist');           // bypass driver
 app.commandLine.appendSwitch('enable-features',
   'VaapiVideoDecoder,VaapiVideoEncoder,CanvasOopRasterization');
 
-const ICON = path.join(__dirname, 'icon.ico');
+const ICON_ICO = path.join(__dirname, 'icon.ico');
+const ICON = ICON_ICO;
 
 // ── State ────────────────────────────────────────────────────────────────────
 let mainWindow = null;
@@ -82,17 +103,25 @@ let iframeDialogWindow = null;
 let pasteDialogWindow = null;
 let pasteBlockerWindow = null;
 let credentialDialogWindow = null;
+let resolutionDialogWindow = null;
 let pasteAborted = false;
 let pasteLocked = false;
 let pasteSendingSynthetic = false;
 let activePasteOperation = null;
 let rootUrl = null;          // URL entered at startup
 let pendingIframeUrl = null;
+let pendingIframeRequest = null;
+let iframeExpandRequestId = 0;
+const pendingIframeExpansions = new Map();
 let pendingCredential = null;
 const iframeQueue   = []; // queued iframe srcs waiting for user decision
 const mainNavigationHistory = createNavigationHistory({ limit: 50 });
 let activeProfileKey = 'default';
 let activePartition = partitionForProfile(activeProfileKey);
+let activeResolutionSetting = { ...DEFAULT_RESOLUTION_SETTING };
+let activeResolutionDisplayBounds = null;
+let mainWindowUsesMacSimpleFullscreen = false;
+const resolutionHookedPartitions = new Set();
 
 const PASTE_DEFAULT_CHARS_PER_SECOND = 25;
 const PASTE_MIN_CHARS_PER_SECOND = 5;
@@ -102,6 +131,53 @@ const PASTE_PRIME_DELAY_MS = 150;
 const PASTE_FINISH_DELAY_MS = 350;
 const PASTE_HURRY_BATCH_SIZE = 20;
 const PASTE_HURRY_BATCH_DELAY_MS = 16;
+const RESOLUTION_DEBUG_PREFIX = '[JP Entry][resolution]';
+let resolutionDebugEnabledCache = null;
+
+function resolutionDebugFlagPath() {
+  return path.join(app.getPath('userData'), 'resolution-debug.enabled');
+}
+
+function resolutionDebugLogPath() {
+  return path.join(app.getPath('userData'), 'resolution-debug.log');
+}
+
+function isResolutionDebugEnabled() {
+  if (process.env.JP_RESOLUTION_DEBUG === '1') return true;
+  if (resolutionDebugEnabledCache != null) return resolutionDebugEnabledCache;
+
+  try {
+    resolutionDebugEnabledCache = fs.existsSync(resolutionDebugFlagPath());
+  } catch (_err) {
+    resolutionDebugEnabledCache = false;
+  }
+  return resolutionDebugEnabledCache;
+}
+
+function safeLogValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value);
+  } catch (_err) {
+    return String(value);
+  }
+}
+
+function resolutionDebugLog(...parts) {
+  if (!isResolutionDebugEnabled()) return;
+
+  const message = parts.map(safeLogValue).join(' ');
+  const line = `${new Date().toISOString()} ${message}`;
+  console.log(`${RESOLUTION_DEBUG_PREFIX} ${message}`);
+
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true });
+    fs.appendFileSync(resolutionDebugLogPath(), `${line}\n`, 'utf8');
+  } catch (_err) {
+    // Debug logging must never affect kiosk navigation.
+  }
+}
 
 // ── Session setup ─────────────────────────────────────────────────────────────
 // Called when a kiosk profile is selected. Each profile gets its own
@@ -113,6 +189,7 @@ function setupSession(partition = activePartition) {
   }
 
   const ses = session.fromPartition(partition);
+  attachResolutionWebRequestHandler(partition, ses);
 
   // Allow all cookies (including HTTP, local IPs, non-standard ports)
   ses.webRequest.onHeadersReceived((details, callback) => {
@@ -125,6 +202,114 @@ function setupSession(partition = activePartition) {
 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function isMacPlatform() {
+  return process.platform === 'darwin';
+}
+
+function mainWindowDisplayOptions(display, fullscreen) {
+  const bounds = display && display.bounds
+    ? display.bounds
+    : screen.getPrimaryDisplay().bounds;
+
+  if (isMacPlatform()) {
+    const area = fullscreen
+      ? bounds
+      : ((display && display.workArea) || bounds);
+    return {
+      x: area.x,
+      y: area.y,
+      width: area.width,
+      height: area.height,
+      fullscreen: Boolean(fullscreen),
+    };
+  }
+
+  const options = {
+    x: bounds.x,
+    y: bounds.y,
+  };
+
+  if (fullscreen) {
+    options.fullscreen = true;
+  }
+
+  return options;
+}
+
+function parentedPopupOptions(options = {}) {
+  if (!isMacPlatform() || !mainWindow || mainWindow.isDestroyed()) return {};
+
+  return {
+    parent: mainWindow,
+    modal: options.modal !== false,
+  };
+}
+
+function keepPopupWithFullscreenParent(browserWindow) {
+  if (
+    !isMacPlatform() ||
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    !browserWindow ||
+    browserWindow.isDestroyed()
+  ) {
+    return;
+  }
+
+  if (typeof browserWindow.moveTop === 'function') {
+    browserWindow.moveTop();
+  }
+  if (typeof browserWindow.focus === 'function') {
+    browserWindow.focus();
+  }
+}
+
+function operatorWindowChromeOptions() {
+  if (isMacPlatform()) {
+    return {
+      frame: true,
+      alwaysOnTop: false,
+      fullscreenable: false,
+      useContentSize: true,
+    };
+  }
+
+  return {
+    frame: false,
+    alwaysOnTop: true,
+  };
+}
+
+function installApplicationMenu() {
+  if (isMacPlatform()) {
+    return;
+  }
+
+  Menu.setApplicationMenu(null);
+}
+
+function focusPrimaryWindow() {
+  const target = [
+    resolutionDialogWindow,
+    navDialogWindow,
+    pasteDialogWindow,
+    credentialDialogWindow,
+    iframeDialogWindow,
+    mainWindow,
+    urlDialogWindow,
+  ].find((browserWindow) => browserWindow && !browserWindow.isDestroyed());
+
+  if (target) {
+    if (typeof target.show === 'function') target.show();
+    if (typeof target.focus === 'function') target.focus();
+    return;
+  }
+
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createUrlDialog();
+  }
+}
 
 // Returns {x, y} to center a dialog of given size on the same display as mainWindow.
 function dialogPosition(width, height) {
@@ -165,6 +350,197 @@ function dialogBounds(preferredWidth, preferredHeight, minWidth, minHeight) {
   };
 }
 
+function displayBoundsFromDisplay(display) {
+  const fallback = { width: 0, height: 0 };
+  const area = display && (display.bounds || display.workArea);
+  if (!area) return fallback;
+
+  return {
+    width: Math.round(Number(area.width) || 0),
+    height: Math.round(Number(area.height) || 0),
+  };
+}
+
+function currentResolutionDisplayBounds() {
+  const ref = mainWindow || urlDialogWindow || resolutionDialogWindow;
+  const display = ref && !ref.isDestroyed()
+    ? screen.getDisplayMatching(ref.getBounds())
+    : screen.getPrimaryDisplay();
+  return displayBoundsFromDisplay(display);
+}
+
+function activeResolutionOverrideText() {
+  return resolutionOverrideFromSetting(
+    activeResolutionSetting,
+    activeResolutionDisplayBounds || currentResolutionDisplayBounds()
+  );
+}
+
+function resolutionDialogPayload(displayBounds = currentResolutionDisplayBounds()) {
+  return {
+    setting: activeResolutionSetting,
+    displayBounds,
+    label: resolutionLabel(activeResolutionSetting, displayBounds),
+    presets: PRESET_RESOLUTIONS,
+    limits: {
+      minWidth: MIN_WIDTH,
+      minHeight: MIN_HEIGHT,
+      maxWidth: MAX_WIDTH,
+      maxHeight: MAX_HEIGHT,
+    },
+  };
+}
+
+function sendResolutionOverrideToMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  resolutionDebugLog('send renderer override', activeResolutionOverrideText() || '(auto)');
+  mainWindow.webContents.send(
+    'remote-resolution-override',
+    activeResolutionOverrideText()
+  );
+}
+
+function setActiveResolutionSetting(setting, displayBounds = currentResolutionDisplayBounds()) {
+  activeResolutionSetting = normalizeResolutionSetting(setting);
+  activeResolutionDisplayBounds = displayBounds;
+  resolutionDebugLog(
+    'set resolution',
+    { setting: activeResolutionSetting, displayBounds, override: activeResolutionOverrideText() || '(auto)' }
+  );
+  sendResolutionOverrideToMainWindow();
+}
+
+function isFullscreenLikeWindow(browserWindow) {
+  if (!browserWindow || browserWindow.isDestroyed()) return true;
+  if (isMacPlatform() && browserWindow === mainWindow && mainWindowUsesMacSimpleFullscreen) {
+    return true;
+  }
+
+  const nativeFullscreen = typeof browserWindow.isFullScreen === 'function' &&
+    browserWindow.isFullScreen();
+  const simpleFullscreen = typeof browserWindow.isSimpleFullScreen === 'function' &&
+    browserWindow.isSimpleFullScreen();
+  return Boolean(nativeFullscreen || simpleFullscreen);
+}
+
+function recreateMainWindowForResolutionChange() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  const previousWindow = mainWindow;
+  const currentUrl = normalizeNavigationUrl(previousWindow.webContents.getURL());
+  const requiresFreshConnection = isGuacamoleClientUrl(currentUrl);
+  const nextUrl = requiresFreshConnection ? rootUrl : (currentUrl || rootUrl);
+  const targetDisplay = screen.getDisplayMatching(previousWindow.getBounds());
+  const fullscreen = isFullscreenLikeWindow(previousWindow);
+
+  resolutionDebugLog('recreate main window for resolution change', {
+    currentUrl,
+    url: nextUrl,
+    requiresFreshConnection,
+    fullscreen,
+    override: activeResolutionOverrideText() || '(auto)',
+  });
+
+  closePasteInputBlocker();
+  mainWindow = null;
+  mainWindowUsesMacSimpleFullscreen = false;
+
+  if (!previousWindow.isDestroyed()) {
+    previousWindow.close();
+  }
+
+  setTimeout(() => {
+    createMainWindow(nextUrl || rootUrl, targetDisplay, fullscreen);
+  }, 120);
+}
+
+function readableUploadBody(details) {
+  const chunks = [];
+  for (const item of details.uploadData || []) {
+    if (item.bytes) {
+      chunks.push(Buffer.from(item.bytes));
+    }
+  }
+
+  if (!chunks.length) return '';
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function uploadResolutionSummary(details) {
+  const body = readableUploadBody(details);
+  if (!body) return { hasBody: false };
+
+  try {
+    const data = JSON.parse(body);
+    const options = data && typeof data === 'object' && !Array.isArray(data)
+      ? data.connect_options
+      : null;
+    return {
+      hasBody: true,
+      hasConnectOptions: Boolean(options && typeof options === 'object' && !Array.isArray(options)),
+      resolution: options && options.resolution ? String(options.resolution) : '',
+    };
+  } catch (_err) {
+    return { hasBody: true, json: false };
+  }
+}
+
+function describeRequestUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const params = url.searchParams;
+    return {
+      location: `${url.protocol}//${url.host}${url.pathname}`,
+      width: params.get('GUAC_WIDTH') || '',
+      height: params.get('GUAC_HEIGHT') || '',
+    };
+  } catch (_err) {
+    return { location: String(rawUrl || '') };
+  }
+}
+
+function attachResolutionWebRequestHandler(partition, ses) {
+  if (resolutionHookedPartitions.has(partition)) return;
+  resolutionHookedPartitions.add(partition);
+
+  resolutionDebugLog('attach webRequest', partition);
+  ses.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => {
+    const isWebSocketRequest = /^wss?:/i.test(details.url);
+
+    if (isConnectionTokenUrl(details.url)) {
+      resolutionDebugLog(
+        'token request observed',
+        details.method,
+        describeRequestUrl(details.url),
+        uploadResolutionSummary(details)
+      );
+      callback({});
+      return;
+    }
+
+    const nextUrl = applyResolutionToGuacamoleUrl(
+      details.url,
+      activeResolutionOverrideText()
+    );
+
+    if (isLionConnectWebSocketUrl(details.url) || isLionConnectWebSocketUrl(nextUrl)) {
+      resolutionDebugLog(
+        nextUrl && nextUrl !== details.url ? 'guacamole ws redirect' : 'guacamole ws observed',
+        {
+          override: activeResolutionOverrideText() || '(auto)',
+          before: describeRequestUrl(details.url),
+          after: describeRequestUrl(nextUrl),
+        }
+      );
+    } else if (isWebSocketRequest && (/\/lion\/|\/guacamole\/|GUAC_WIDTH|GUAC_HEIGHT/i.test(details.url))) {
+      resolutionDebugLog('ws observed non-matching', describeRequestUrl(details.url));
+    }
+
+    callback(nextUrl && nextUrl !== details.url ? { redirectURL: nextUrl } : {});
+  });
+}
+
 function loadMainUrl(url) {
   if (!mainWindow || mainWindow.isDestroyed()) return false;
 
@@ -173,6 +549,53 @@ function loadMainUrl(url) {
 
   mainWindow.loadURL(normalizedUrl).catch(() => {});
   return true;
+}
+
+function normalizeIframeRequest(payload) {
+  const url = typeof payload === 'string' ? payload : payload && payload.url;
+  if (!normalizeNavigationUrl(url)) return null;
+
+  return { url };
+}
+
+function noteIframeExpandFailure(request, reason) {
+  resolutionDebugLog('could not expand lion iframe in place', {
+    reason,
+    url: request && request.url,
+  });
+  return false;
+}
+
+function expandIframeInPlace(request) {
+  if (!mainWindow || mainWindow.isDestroyed() || !request) return false;
+
+  const requestId = String(++iframeExpandRequestId);
+  pendingIframeExpansions.set(requestId, request);
+  mainWindow.webContents.send('expand-iframe', {
+    requestId,
+    url: request.url,
+  });
+
+  setTimeout(() => {
+    const pendingRequest = pendingIframeExpansions.get(requestId);
+    if (!pendingRequest) return;
+
+    pendingIframeExpansions.delete(requestId);
+    noteIframeExpandFailure(pendingRequest, 'expand-timeout');
+  }, 800);
+
+  resolutionDebugLog('expand lion iframe in place', { url: request.url });
+  return true;
+}
+
+function loadIframeRequest(request) {
+  if (!request) return false;
+
+  if (isLionConnectPageUrl(request.url)) {
+    return expandIframeInPlace(request);
+  }
+
+  return loadMainUrl(request.url);
 }
 
 function loadPreviousRecordedMainPage(currentUrl) {
@@ -199,17 +622,6 @@ function goToPreviousMainPage() {
   }
 
   return loadPreviousRecordedMainPage(currentUrl);
-}
-
-function isShortcutKey(input, key, options = {}) {
-  if (!input || input.type !== 'keyDown') return false;
-  return Boolean(
-    input.control &&
-    input.alt &&
-    !input.meta &&
-    Boolean(input.shift) === Boolean(options.shift) &&
-    String(input.key || '').toLowerCase() === key
-  );
 }
 
 function handleWindowScopedShortcut(input) {
@@ -357,6 +769,7 @@ function showPasteInputBlocker() {
   const display = screen.getDisplayMatching(mainWindow.getBounds());
   const bounds = display.bounds || mainWindow.getBounds();
   pasteBlockerWindow = new BrowserWindow({
+    ...parentedPopupOptions({ modal: false }),
     x: bounds.x,
     y: bounds.y,
     width: bounds.width,
@@ -374,6 +787,7 @@ function showPasteInputBlocker() {
       contextIsolation: true,
     },
   });
+  keepPopupWithFullscreenParent(pasteBlockerWindow);
   pasteBlockerWindow.setAlwaysOnTop(true, 'screen-saver');
 
   pasteBlockerWindow.loadURL(
@@ -487,11 +901,10 @@ function requestOtpFillSoon() {
 
 function createUrlDialog() {
   urlDialogWindow = new BrowserWindow({
-    width: 520,
-    height: 380,
+    width: 540,
+    height: 520,
     resizable: false,
-    frame: false,
-    alwaysOnTop: true,
+    ...operatorWindowChromeOptions(),
     icon: ICON,
     webPreferences: {
       nodeIntegration: true,
@@ -506,6 +919,10 @@ function createUrlDialog() {
         zones: KIOSK_ZONES,
         defaultZone: DEFAULT_KIOSK_ZONE,
       });
+      urlDialogWindow.webContents.send(
+        'resolution-options',
+        resolutionDialogPayload(currentResolutionDisplayBounds())
+      );
     }
   });
   urlDialogWindow.on('closed', () => { urlDialogWindow = null; });
@@ -514,6 +931,10 @@ function createUrlDialog() {
 function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
   rootUrl = url;
   mainNavigationHistory.reset(url);
+  setActiveResolutionSetting(
+    activeResolutionSetting,
+    displayBoundsFromDisplay(targetDisplay || screen.getPrimaryDisplay())
+  );
   activeProfileKey = profileKeyForKiosk(url, {
     zones: KIOSK_ZONES,
     zoneKey,
@@ -521,21 +942,36 @@ function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
   });
   activePartition = partitionForProfile(activeProfileKey);
   setupSession(activePartition);
-
-  const { x, y } = targetDisplay ? targetDisplay.bounds : { x: 0, y: 0 };
+  mainWindowUsesMacSimpleFullscreen = isMacPlatform() && Boolean(fullscreen);
 
   mainWindow = new BrowserWindow({
-    x,
-    y,
-    fullscreen: fullscreen,
+    ...mainWindowDisplayOptions(targetDisplay, fullscreen),
     kiosk: false,
     icon: ICON,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      nodeIntegrationInSubFrames: true,
       preload: path.join(__dirname, 'preload.js'),
       partition: activePartition,
+      additionalArguments: [
+        `--jp-remote-resolution=${encodeURIComponent(activeResolutionOverrideText())}`,
+        `--jp-resolution-debug=${isResolutionDebugEnabled() ? '1' : '0'}`,
+      ],
     },
+  });
+
+  resolutionDebugLog('create main window', {
+    url,
+    profileKey: activeProfileKey,
+    partition: activePartition,
+    override: activeResolutionOverrideText() || '(auto)',
+  });
+
+  mainWindow.webContents.on('console-message', (_event, _level, message, line, sourceId) => {
+    if (String(message || '').includes(RESOLUTION_DEBUG_PREFIX)) {
+      resolutionDebugLog('renderer', { message, line, sourceId });
+    }
   });
 
   loadMainUrl(url);
@@ -598,6 +1034,7 @@ function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
   }
   mainWindow.webContents.on('did-finish-load', injectFocusTracker);
   mainWindow.webContents.on('did-finish-load', requestOtpFillSoon);
+  mainWindow.webContents.on('did-finish-load', sendResolutionOverrideToMainWindow);
   mainWindow.webContents.on('did-navigate', (_event, navigatedUrl) => {
     mainNavigationHistory.record(navigatedUrl);
     injectFocusTracker();
@@ -623,32 +1060,73 @@ function createMainWindow(url, targetDisplay, fullscreen = true, zoneKey = '') {
     event.preventDefault();
   });
 
+  const createdMainWindow = mainWindow;
   mainWindow.on('closed', () => {
     closePasteInputBlocker();
-    mainWindow = null;
+    if (mainWindow === createdMainWindow) {
+      mainWindowUsesMacSimpleFullscreen = false;
+      mainWindow = null;
+    }
   });
 }
 
 function createNavDialog() {
   if (navDialogWindow) { navDialogWindow.focus(); return; }
 
-  const { x, y } = dialogPosition(400, 560);
+  const { x, y } = dialogPosition(400, 590);
   navDialogWindow = new BrowserWindow({
+    ...parentedPopupOptions(),
     x, y,
     width: 400,
-    height: 560,
+    height: 590,
     resizable: false,
-    frame: false,
-    alwaysOnTop: true,
+    ...operatorWindowChromeOptions(),
     icon: ICON,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
+  keepPopupWithFullscreenParent(navDialogWindow);
   attachWindowScopedShortcuts(navDialogWindow);
   navDialogWindow.loadFile(path.join(__dirname, 'nav-dialog.html'));
   navDialogWindow.on('closed', () => { navDialogWindow = null; });
+}
+
+function createResolutionDialog() {
+  if (resolutionDialogWindow && !resolutionDialogWindow.isDestroyed()) {
+    resolutionDialogWindow.focus();
+    return;
+  }
+
+  const { x, y } = dialogPosition(480, 430);
+  resolutionDialogWindow = new BrowserWindow({
+    ...parentedPopupOptions(),
+    x, y,
+    width: 480,
+    height: 430,
+    resizable: false,
+    ...operatorWindowChromeOptions(),
+    icon: ICON,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+  keepPopupWithFullscreenParent(resolutionDialogWindow);
+  attachWindowScopedShortcuts(resolutionDialogWindow);
+  resolutionDialogWindow.loadFile(path.join(__dirname, 'resolution-dialog.html'));
+  resolutionDialogWindow.webContents.on('did-finish-load', () => {
+    if (resolutionDialogWindow && !resolutionDialogWindow.isDestroyed()) {
+      resolutionDialogWindow.webContents.send(
+        'resolution-init',
+        resolutionDialogPayload(currentResolutionDisplayBounds())
+      );
+    }
+  });
+  resolutionDialogWindow.on('closed', () => {
+    resolutionDialogWindow = null;
+  });
 }
 
 function createPasteDialog(initialText = '', source = 'manual') {
@@ -656,19 +1134,20 @@ function createPasteDialog(initialText = '', source = 'manual') {
 
   const { x, y, width, height } = dialogBounds(620, 620, 520, 500);
   pasteDialogWindow = new BrowserWindow({
+    ...parentedPopupOptions(),
     x, y,
     width,
     height,
     resizable: false,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
+    transparent: !isMacPlatform(),
+    ...operatorWindowChromeOptions(),
     icon: ICON,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
+  keepPopupWithFullscreenParent(pasteDialogWindow);
   attachWindowScopedShortcuts(pasteDialogWindow);
   pasteDialogWindow.loadFile(path.join(__dirname, 'paste-dialog.html'));
   pasteDialogWindow.webContents.on('did-finish-load', () => {
@@ -709,18 +1188,19 @@ function createCredentialDialog(credential, mode) {
 
   const { x, y } = dialogPosition(500, 390);
   credentialDialogWindow = new BrowserWindow({
+    ...parentedPopupOptions(),
     x, y,
     width: 500,
     height: 390,
     resizable: false,
-    frame: false,
-    alwaysOnTop: true,
+    ...operatorWindowChromeOptions(),
     icon: ICON,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
+  keepPopupWithFullscreenParent(credentialDialogWindow);
   attachWindowScopedShortcuts(credentialDialogWindow);
   credentialDialogWindow.loadFile(path.join(__dirname, 'credential-dialog.html'));
   credentialDialogWindow.webContents.on('did-finish-load', () => {
@@ -739,49 +1219,55 @@ function createCredentialDialog(credential, mode) {
   });
 }
 
-function createIframeDialog(iframeUrl) {
+function createIframeDialog(iframePayload) {
+  const iframeRequest = normalizeIframeRequest(iframePayload);
+  if (!iframeRequest) return;
+
   if (iframeDialogWindow) {
-    // Dialog already open — queue for later
-    if (!iframeQueue.includes(iframeUrl) && iframeUrl !== pendingIframeUrl) {
-      iframeQueue.push(iframeUrl);
+    // Dialog already open - queue for later.
+    const alreadyQueued = iframeQueue.some((queued) => queued.url === iframeRequest.url);
+    if (!alreadyQueued && iframeRequest.url !== pendingIframeUrl) {
+      iframeQueue.push(iframeRequest);
     }
     iframeDialogWindow.focus();
     return;
   }
 
-  pendingIframeUrl = iframeUrl;
+  pendingIframeRequest = iframeRequest;
+  pendingIframeUrl = iframeRequest.url;
 
   const { x, y } = dialogPosition(460, 280);
   iframeDialogWindow = new BrowserWindow({
+    ...parentedPopupOptions(),
     x, y,
     width: 460,
     height: 280,
     resizable: false,
-    frame: false,
-    alwaysOnTop: true,
+    ...operatorWindowChromeOptions(),
     icon: ICON,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
+  keepPopupWithFullscreenParent(iframeDialogWindow);
   attachWindowScopedShortcuts(iframeDialogWindow);
   iframeDialogWindow.loadFile(
     path.join(__dirname, 'iframe-dialog.html')
   );
   iframeDialogWindow.webContents.on('did-finish-load', () => {
-    iframeDialogWindow.webContents.send('iframe-url', iframeUrl);
+    iframeDialogWindow.webContents.send('iframe-url', iframeRequest.url);
   });
   iframeDialogWindow.on('closed', () => {
     iframeDialogWindow = null;
-    pendingIframeUrl   = null;
-    // Show next queued iframe if any
+    pendingIframeUrl = null;
+    pendingIframeRequest = null;
+    // Show next queued iframe if any.
     if (iframeQueue.length > 0) {
       createIframeDialog(iframeQueue.shift());
     }
   });
 }
-
 // ── Global shortcuts ─────────────────────────────────────────────────────────
 // Window-scoped shortcuts are handled with before-input-event so multiple
 // app instances can use the same key bindings without OS-level conflicts.
@@ -802,6 +1288,13 @@ ipcMain.on('url-submitted', (_event, payload) => {
   const url = typeof payload === 'string' ? payload : payload.url;
   const fullscreen = typeof payload === 'string' ? true : Boolean(payload.fullscreen);
   const zoneKey = typeof payload === 'string' ? '' : payload.zone;
+  const resolutionSetting = typeof payload === 'string'
+    ? activeResolutionSetting
+    : payload.resolution;
+  setActiveResolutionSetting(
+    resolutionSetting,
+    displayBoundsFromDisplay(targetDisplay)
+  );
   createMainWindow(url, targetDisplay, fullscreen, zoneKey);
 });
 
@@ -837,6 +1330,12 @@ ipcMain.on('nav-action', (_event, action) => {
     return;
   }
 
+  if (action === 'resolution') {
+    if (navDialogWindow) navDialogWindow.close();
+    createResolutionDialog();
+    return;
+  }
+
   if (navDialogWindow) navDialogWindow.close();
 
   if (action === 'quit') {
@@ -860,17 +1359,54 @@ ipcMain.on('nav-action', (_event, action) => {
 });
 
 // iframe detected in page
-ipcMain.on('iframe-detected', (_event, iframeUrl) => {
-  createIframeDialog(iframeUrl);
+ipcMain.on('iframe-detected', (_event, iframePayload) => {
+  createIframeDialog(iframePayload);
 });
 
 // User decision on iframe redirect
 ipcMain.on('iframe-action', (_event, action) => {
-  const url = pendingIframeUrl;
+  const request = pendingIframeRequest;
   if (iframeDialogWindow) iframeDialogWindow.close();
 
-  if (action === 'navigate' && url && mainWindow) {
-    loadMainUrl(url);
+  if (action === 'navigate' && request && mainWindow) {
+    loadIframeRequest(request);
+  }
+});
+
+ipcMain.on('expand-iframe-result', (event, result) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) return;
+
+  const requestId = result && result.requestId;
+  const request = pendingIframeExpansions.get(requestId);
+  if (!request) return;
+
+  pendingIframeExpansions.delete(requestId);
+  if (result.ok) {
+    resolutionDebugLog('expanded lion iframe in place', { url: request.url });
+    return;
+  }
+
+  noteIframeExpandFailure(request, 'expand-not-found');
+});
+
+ipcMain.on('resolution-action', (_event, payload) => {
+  const action = payload && payload.action;
+  let shouldReloadMainWindow = false;
+
+  if (action === 'save') {
+    setActiveResolutionSetting(
+      payload.setting,
+      currentResolutionDisplayBounds()
+    );
+    shouldReloadMainWindow = Boolean(mainWindow && !mainWindow.isDestroyed());
+  }
+
+  if (resolutionDialogWindow && !resolutionDialogWindow.isDestroyed()) {
+    resolutionDialogWindow.close();
+  }
+
+  if (shouldReloadMainWindow) {
+    recreateMainWindowForResolutionChange();
   }
 });
 
@@ -1094,8 +1630,12 @@ ipcMain.on('credential-mfa-secret-changed', (_event, value) => {
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
-  Menu.setApplicationMenu(null); // remove File/Edit/View menu bar from all windows
+  installApplicationMenu();
   createUrlDialog();
+});
+
+app.on('activate', () => {
+  focusPrimaryWindow();
 });
 
 app.on('before-quit', async () => {

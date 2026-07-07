@@ -11,6 +11,7 @@
     "start": "electron .",
     "test": "node --test",
     "build": "electron-builder --win",
+    "build:mac": "electron-builder --mac dir",
     "dist:appimage": "electron-builder --linux AppImage"
   },
   "dependencies": {
@@ -31,9 +32,23 @@
       "instance-profile.js",
       "navigation-history.js",
       "otp-autofill.js",
+      "resolution-settings.js",
+      "window-shortcuts.js",
       "*.html",
+      "icon.png",
       "icon.ico"
     ],
+    "mac": {
+      "target": [
+        "dir"
+      ],
+      "category": "public.app-category.utilities",
+      "icon": "icon.png",
+      "extendInfo": {
+        "LSUIElement": false,
+        "LSBackgroundOnly": false
+      }
+    },
     "win": {
       "target": [
         {

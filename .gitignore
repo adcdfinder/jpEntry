@@ -5,3 +5,4 @@ dist/
 .npm-cache/
 .electron-cache/
 .sensitive-export/
+.omx/

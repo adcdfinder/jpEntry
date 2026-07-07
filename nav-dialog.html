@@ -85,6 +85,9 @@
     #iframeBtn { background: #F5F6F7; }
     #iframeBtn:hover { background: #EAEBEC; }
 
+    #resolutionBtn { background: #F5F6F7; }
+    #resolutionBtn:hover { background: #EAEBEC; }
+
     #clearAllCredentialsBtn {
       background: #F5F6F7;
     }
@@ -126,6 +129,7 @@
       <button id="backBtn">Go to Last Page</button>
       <button id="pasteBtn">Paste Text</button>
       <button id="iframeBtn">Detect Iframes</button>
+      <button id="resolutionBtn">Remote Resolution</button>
     </div>
     <hr class="divider" />
     <div class="nav-group">
@@ -150,6 +154,7 @@
     bindAction('backBtn', 'back');
     bindAction('pasteBtn', 'paste');
     bindAction('iframeBtn', 'check-iframes');
+    bindAction('resolutionBtn', 'resolution');
     bindAction('clearAllCredentialsBtn', 'clear-all-credentials');
     bindAction('quitBtn', 'quit');
     bindAction('cancelBtn', 'cancel');

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Remote Resolution</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    @keyframes popIn {
+      from { opacity: 0; transform: scale(0.96) translateY(8px); }
+      to   { opacity: 1; transform: scale(1)    translateY(0);   }
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #F0F2F4;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .card {
+      background: #FFFFFF;
+      border-radius: 16px;
+      padding: 24px 24px 20px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 8px 32px rgba(0,0,0,0.10);
+      border: 1px solid rgba(0,0,0,0.06);
+      animation: popIn 0.18s cubic-bezier(0.34, 1.3, 0.64, 1) both;
+      color: #5C6773;
+      -webkit-app-region: drag;
+    }
+    h2 {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 14px;
+      color: #399EE6;
+      letter-spacing: 0.01em;
+    }
+    label {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #7A8591;
+    }
+    select,
+    input,
+    button,
+    #error,
+    .custom-resolution {
+      -webkit-app-region: no-drag;
+    }
+    select,
+    input {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1.5px solid #E0E1E2;
+      background: #F8F9FA;
+      color: #5C6773;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.18s, background 0.18s;
+    }
+    select:focus,
+    input:focus {
+      border-color: #399EE6;
+      background: #FFFFFF;
+    }
+    .custom-resolution {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .custom-resolution[hidden] {
+      display: none;
+    }
+    #error {
+      margin-top: 8px;
+      font-size: 0.82rem;
+      color: #E05858;
+      min-height: 1.1em;
+    }
+    .buttons {
+      display: flex;
+      gap: 9px;
+      margin-top: 14px;
+    }
+    button {
+      flex: 1;
+      padding: 10px;
+      border-radius: 10px;
+      border: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+    }
+    button:active { transform: scale(0.97); }
+    #saveBtn { background: #399EE6; color: #FFFFFF; }
+    #saveBtn:hover { background: #55AAEE; }
+    #cancelBtn { background: #F5F6F7; color: #5C6773; }
+    #cancelBtn:hover { background: #EAEBEC; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Remote Resolution</h2>
+    <label for="resolutionMode">Resolution</label>
+    <select id="resolutionMode"></select>
+    <div id="customResolution" class="custom-resolution" hidden>
+      <input type="number" id="resolutionWidth" min="640" max="7680" step="1" />
+      <input type="number" id="resolutionHeight" min="480" max="4320" step="1" />
+    </div>
+    <div id="error"></div>
+    <div class="buttons">
+      <button id="saveBtn">Apply</button>
+      <button id="cancelBtn">Cancel</button>
+    </div>
+  </div>
+  <script>
+    const { ipcRenderer } = require('electron');
+    const {
+      DEFAULT_RESOLUTION_SETTING,
+      PRESET_RESOLUTIONS,
+      RESOLUTION_STORAGE_KEY,
+      normalizeResolutionSetting,
+    } = require('./resolution-settings');
+
+    const resolutionMode = document.getElementById('resolutionMode');
+    const customResolution = document.getElementById('customResolution');
+    const resolutionWidth = document.getElementById('resolutionWidth');
+    const resolutionHeight = document.getElementById('resolutionHeight');
+    const error = document.getElementById('error');
+
+    let resolutionOptions = {
+      presets: PRESET_RESOLUTIONS,
+      setting: DEFAULT_RESOLUTION_SETTING,
+      displayBounds: null,
+    };
+
+    function optionValueForSetting(setting) {
+      const normalized = normalizeResolutionSetting(setting);
+      if (normalized.mode === 'auto' || normalized.mode === 'display') {
+        return normalized.mode;
+      }
+      if (normalized.mode === 'preset') {
+        return `preset:${normalized.width}x${normalized.height}`;
+      }
+      return 'custom';
+    }
+
+    function addOption(value, label) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = label;
+      resolutionMode.appendChild(option);
+    }
+
+    function render(payload) {
+      resolutionOptions = Object.assign({}, resolutionOptions, payload || {});
+      const presets = Array.isArray(resolutionOptions.presets)
+        ? resolutionOptions.presets
+        : PRESET_RESOLUTIONS;
+      const display = resolutionOptions.displayBounds || {};
+      const displayLabel = display.width && display.height
+        ? `Display size (${display.width}x${display.height})`
+        : 'Display size';
+      const setting = normalizeResolutionSetting(resolutionOptions.setting);
+
+      resolutionMode.innerHTML = '';
+      addOption('auto', 'Auto');
+      addOption('display', displayLabel);
+      presets.forEach((preset) => {
+        addOption(`preset:${preset.width}x${preset.height}`, preset.label);
+      });
+      addOption('custom', 'Custom');
+
+      resolutionMode.value = optionValueForSetting(setting);
+      resolutionWidth.value = setting.width ? String(setting.width) : '1920';
+      resolutionHeight.value = setting.height ? String(setting.height) : '1080';
+      updateCustomVisibility();
+    }
+
+    function updateCustomVisibility() {
+      customResolution.hidden = resolutionMode.value !== 'custom';
+      error.textContent = '';
+    }
+
+    function currentSetting() {
+      const value = resolutionMode.value;
+      if (value === 'auto' || value === 'display') {
+        return { mode: value, width: 0, height: 0 };
+      }
+      if (value.startsWith('preset:')) {
+        const parts = value.slice('preset:'.length).split('x');
+        return normalizeResolutionSetting({
+          mode: 'preset',
+          width: parts[0],
+          height: parts[1],
+        });
+      }
+      return normalizeResolutionSetting({
+        mode: 'custom',
+        width: resolutionWidth.value,
+        height: resolutionHeight.value,
+      });
+    }
+
+    function saveSetting() {
+      const setting = currentSetting();
+      if (resolutionMode.value === 'custom' && setting.mode !== 'custom') {
+        error.textContent = 'Enter a valid width and height.';
+        return;
+      }
+
+      try {
+        localStorage.setItem(RESOLUTION_STORAGE_KEY, JSON.stringify(setting));
+      } catch (_err) {}
+      ipcRenderer.send('resolution-action', { action: 'save', setting });
+    }
+
+    render({});
+
+    ipcRenderer.on('resolution-init', (_event, payload) => render(payload));
+    resolutionMode.addEventListener('change', updateCustomVisibility);
+    document.getElementById('saveBtn').addEventListener('click', saveSetting);
+    document.getElementById('cancelBtn').addEventListener('click', () => {
+      ipcRenderer.send('resolution-action', { action: 'cancel' });
+    });
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') saveSetting();
+      if (event.key === 'Escape') ipcRenderer.send('resolution-action', { action: 'cancel' });
+    });
+  </script>
+</body>
+</html>
