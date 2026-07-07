@@ -85,6 +85,21 @@ test('iframe dialog keeps navigate and stay actions wired', () => {
   assert.match(html, /iframe-action', 'stay'/);
 });
 
+test('iframe navigation expands Lion connect URLs without reusing token', () => {
+  const preload = readProjectFile('preload.js');
+  const main = readProjectFile('main.js');
+
+  assert.match(preload, /ipcRenderer\.on\('expand-iframe'/);
+  assert.match(preload, /data-jp-expanded-iframe/);
+  assert.match(preload, /position', 'fixed'/);
+  assert.match(main, /isLionConnectPageUrl/);
+  assert.match(main, /expandIframeInPlace/);
+  assert.match(main, /pendingIframeExpansions/);
+  assert.match(main, /noteIframeExpandFailure/);
+  assert.match(main, /expand-iframe-result/);
+  assert.match(main, /loadIframeRequest/);
+});
+
 test('main process keeps shortcuts window-scoped for multi-instance use', () => {
   const main = readProjectFile('main.js');
 

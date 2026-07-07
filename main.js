@@ -39,6 +39,7 @@ const {
   applyResolutionToGuacamoleUrl,
   isConnectionTokenUrl,
   isGuacamoleClientUrl,
+  isLionConnectPageUrl,
   isLionConnectWebSocketUrl,
   normalizeResolutionSetting,
   resolutionLabel,
@@ -110,6 +111,9 @@ let pasteSendingSynthetic = false;
 let activePasteOperation = null;
 let rootUrl = null;          // URL entered at startup
 let pendingIframeUrl = null;
+let pendingIframeRequest = null;
+let iframeExpandRequestId = 0;
+const pendingIframeExpansions = new Map();
 let pendingCredential = null;
 const iframeQueue   = []; // queued iframe srcs waiting for user decision
 const mainNavigationHistory = createNavigationHistory({ limit: 50 });
@@ -546,6 +550,53 @@ function loadMainUrl(url) {
 
   mainWindow.loadURL(normalizedUrl).catch(() => {});
   return true;
+}
+
+function normalizeIframeRequest(payload) {
+  const url = typeof payload === 'string' ? payload : payload && payload.url;
+  if (!normalizeNavigationUrl(url)) return null;
+
+  return { url };
+}
+
+function noteIframeExpandFailure(request, reason) {
+  resolutionDebugLog('could not expand lion iframe in place', {
+    reason,
+    url: request && request.url,
+  });
+  return false;
+}
+
+function expandIframeInPlace(request) {
+  if (!mainWindow || mainWindow.isDestroyed() || !request) return false;
+
+  const requestId = String(++iframeExpandRequestId);
+  pendingIframeExpansions.set(requestId, request);
+  mainWindow.webContents.send('expand-iframe', {
+    requestId,
+    url: request.url,
+  });
+
+  setTimeout(() => {
+    const pendingRequest = pendingIframeExpansions.get(requestId);
+    if (!pendingRequest) return;
+
+    pendingIframeExpansions.delete(requestId);
+    noteIframeExpandFailure(pendingRequest, 'expand-timeout');
+  }, 800);
+
+  resolutionDebugLog('expand lion iframe in place', { url: request.url });
+  return true;
+}
+
+function loadIframeRequest(request) {
+  if (!request) return false;
+
+  if (isLionConnectPageUrl(request.url)) {
+    return expandIframeInPlace(request);
+  }
+
+  return loadMainUrl(request.url);
 }
 
 function loadPreviousRecordedMainPage(currentUrl) {
@@ -1169,17 +1220,22 @@ function createCredentialDialog(credential, mode) {
   });
 }
 
-function createIframeDialog(iframeUrl) {
+function createIframeDialog(iframePayload) {
+  const iframeRequest = normalizeIframeRequest(iframePayload);
+  if (!iframeRequest) return;
+
   if (iframeDialogWindow) {
-    // Dialog already open — queue for later
-    if (!iframeQueue.includes(iframeUrl) && iframeUrl !== pendingIframeUrl) {
-      iframeQueue.push(iframeUrl);
+    // Dialog already open - queue for later.
+    const alreadyQueued = iframeQueue.some((queued) => queued.url === iframeRequest.url);
+    if (!alreadyQueued && iframeRequest.url !== pendingIframeUrl) {
+      iframeQueue.push(iframeRequest);
     }
     iframeDialogWindow.focus();
     return;
   }
 
-  pendingIframeUrl = iframeUrl;
+  pendingIframeRequest = iframeRequest;
+  pendingIframeUrl = iframeRequest.url;
 
   const { x, y } = dialogPosition(460, 280);
   iframeDialogWindow = new BrowserWindow({
@@ -1201,18 +1257,18 @@ function createIframeDialog(iframeUrl) {
     path.join(__dirname, 'iframe-dialog.html')
   );
   iframeDialogWindow.webContents.on('did-finish-load', () => {
-    iframeDialogWindow.webContents.send('iframe-url', iframeUrl);
+    iframeDialogWindow.webContents.send('iframe-url', iframeRequest.url);
   });
   iframeDialogWindow.on('closed', () => {
     iframeDialogWindow = null;
-    pendingIframeUrl   = null;
-    // Show next queued iframe if any
+    pendingIframeUrl = null;
+    pendingIframeRequest = null;
+    // Show next queued iframe if any.
     if (iframeQueue.length > 0) {
       createIframeDialog(iframeQueue.shift());
     }
   });
 }
-
 // ── Global shortcuts ─────────────────────────────────────────────────────────
 // Window-scoped shortcuts are handled with before-input-event so multiple
 // app instances can use the same key bindings without OS-level conflicts.
@@ -1304,18 +1360,34 @@ ipcMain.on('nav-action', (_event, action) => {
 });
 
 // iframe detected in page
-ipcMain.on('iframe-detected', (_event, iframeUrl) => {
-  createIframeDialog(iframeUrl);
+ipcMain.on('iframe-detected', (_event, iframePayload) => {
+  createIframeDialog(iframePayload);
 });
 
 // User decision on iframe redirect
 ipcMain.on('iframe-action', (_event, action) => {
-  const url = pendingIframeUrl;
+  const request = pendingIframeRequest;
   if (iframeDialogWindow) iframeDialogWindow.close();
 
-  if (action === 'navigate' && url && mainWindow) {
-    loadMainUrl(url);
+  if (action === 'navigate' && request && mainWindow) {
+    loadIframeRequest(request);
   }
+});
+
+ipcMain.on('expand-iframe-result', (event, result) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents) return;
+
+  const requestId = result && result.requestId;
+  const request = pendingIframeExpansions.get(requestId);
+  if (!request) return;
+
+  pendingIframeExpansions.delete(requestId);
+  if (result.ok) {
+    resolutionDebugLog('expanded lion iframe in place', { url: request.url });
+    return;
+  }
+
+  noteIframeExpandFailure(request, 'expand-not-found');
 });
 
 ipcMain.on('resolution-action', (_event, payload) => {

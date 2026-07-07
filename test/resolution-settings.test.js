@@ -7,6 +7,7 @@ const {
   formatResolution,
   isConnectionTokenUrl,
   isGuacamoleClientUrl,
+  isLionConnectPageUrl,
   normalizeResolutionSetting,
   resolutionOverrideFromSetting,
   withResolutionConnectOption,
@@ -87,6 +88,21 @@ test('detects active Guacamole client pages that reuse an existing token', () =>
   );
   assert.equal(
     isGuacamoleClientUrl('https://jump.example/luna/#/assets'),
+    false
+  );
+});
+
+test('detects Lion connect pages that should expand in place', () => {
+  assert.equal(
+    isLionConnectPageUrl('http://jump.example/lion/connect?token=abc'),
+    true
+  );
+  assert.equal(
+    isLionConnectPageUrl('http://jump.example/lion/connect'),
+    false
+  );
+  assert.equal(
+    isLionConnectPageUrl('wss://jump.example/lion/ws/connect/?TOKEN_ID=abc'),
     false
   );
 });

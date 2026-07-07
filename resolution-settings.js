@@ -111,6 +111,17 @@ function isLionConnectWebSocketUrl(rawUrl) {
   }
 }
 
+function isLionConnectPageUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return /^https?:$/i.test(url.protocol) &&
+      /\/lion\/connect\/?$/i.test(url.pathname) &&
+      url.searchParams.has('token');
+  } catch (_err) {
+    return false;
+  }
+}
+
 function applyResolutionToGuacamoleUrl(rawUrl, resolution) {
   const normalized = normalizeResolutionValue(resolution);
   if (!normalized || !isLionConnectWebSocketUrl(rawUrl)) {
@@ -189,6 +200,7 @@ module.exports = {
   formatResolution,
   isConnectionTokenUrl,
   isGuacamoleClientUrl,
+  isLionConnectPageUrl,
   isLionConnectWebSocketUrl,
   isValidResolution,
   normalizeResolutionSetting,
