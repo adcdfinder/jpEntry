@@ -15,10 +15,11 @@
     "dist:appimage": "electron-builder --linux AppImage"
   },
   "dependencies": {
+    "nvm": "^0.0.4",
     "otplib": "^12.0.1"
   },
   "devDependencies": {
-    "electron": "^30.0.0",
+    "electron": "^30.5.1",
     "electron-builder": "^24.0.0"
   },
   "build": {
