@@ -12,9 +12,10 @@ on:
         required: false
         default: false
         type: boolean
+
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -26,8 +27,6 @@ jobs:
   build:
     name: Release Windows x64 installer
     runs-on: windows-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout
@@ -36,10 +35,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: 24
+          cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Resolve release tag
         shell: pwsh
@@ -50,48 +50,64 @@ jobs:
           }
           "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      # 关键修改：禁止 electron-builder 自动发布
       - name: Build Windows package
-        run: npm run build
+        run: npx electron-builder --win --publish=never
 
       - name: Rename Windows installer
         shell: pwsh
         run: |
           $version = $env:RELEASE_TAG -replace '^v', ''
-          $distDir = "dist"
-          $installers = Get-ChildItem "$distDir/*.exe" | Where-Object { $_.Name -match "Setup" -or $_.Name -match "NSIS" }
-          
-          if ($installers) {
-            foreach ($installer in $installers) {
-              $targetName = "JPEntry_${version}_x64-setup.exe"
-              Rename-Item -Path $installer.FullName -NewName $targetName -Force
-            }
+          $installer = Get-ChildItem "dist/*.exe" |
+            Where-Object { $_.Name -match "Setup|NSIS" } |
+            Select-Object -First 1
+
+          if (-not $installer) {
+            throw "Windows installer exe was not found."
           }
 
-      - name: Upload artifacts
+          $targetName = "JPEntry_${version}_x64-setup.exe"
+          Rename-Item -Path $installer.FullName -NewName $targetName -Force
+
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: jpentry-windows-installer
           path: dist/*.exe
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Publish to GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          PRERELEASE: ${{ github.event.inputs.prerelease || false }}
+          PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease || false }}
         run: |
-          $assets = Get-ChildItem "dist/*.exe"
+          $assets = Get-ChildItem "dist/*.exe" |
+            Where-Object { $_.Name -match "Setup|NSIS" }
+
           if (-not $assets) {
-            Write-Warning "No Windows installer exe found in dist/"
-            exit 0
+            throw "No Windows installer exe found."
           }
 
-          $releaseExists = gh release view $env:RELEASE_TAG 2>$null
+          gh release view $env:RELEASE_TAG *> $null
+
           if ($LASTEXITCODE -ne 0) {
-            $args = @("release", "create", $env:RELEASE_TAG, "--target", "${{ github.sha }}", "--title", $env:RELEASE_TAG, "--notes", "Windows installer release.")
+            $args = @(
+              "release",
+              "create",
+              $env:RELEASE_TAG,
+              "--target",
+              "${{ github.sha }}",
+              "--title",
+              $env:RELEASE_TAG,
+              "--notes",
+              "Windows installer release."
+            )
+
             if ($env:PRERELEASE -eq "true") {
               $args += "--prerelease"
             }
+
             gh @args
           }
 
