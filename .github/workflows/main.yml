@@ -26,6 +26,8 @@ jobs:
   build:
     name: Release Windows x64 installer
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -34,7 +36,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '18'
 
       - name: Install dependencies
         run: npm install
