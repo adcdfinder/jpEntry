@@ -10,6 +10,7 @@ const {
   clipboard,
   safeStorage,
   dialog,
+  globalShortcut,
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -624,23 +625,35 @@ function goToPreviousMainPage() {
   return loadPreviousRecordedMainPage(currentUrl);
 }
 
+function triggerNavShortcut() {
+  if (!pasteLocked && mainWindow) createNavDialog();
+}
+
+function triggerPasteShortcut() {
+  openClipboardPasteDialog();
+}
+
+function triggerQuitShortcut() {
+  if (pasteLocked) {
+    cancelActivePasteOperation();
+  } else {
+    app.quit();
+  }
+}
+
 function handleWindowScopedShortcut(input) {
   if (isShortcutKey(input, 'h')) {
-    if (!pasteLocked && mainWindow) createNavDialog();
+    triggerNavShortcut();
     return true;
   }
 
   if (isShortcutKey(input, 'v')) {
-    openClipboardPasteDialog();
+    triggerPasteShortcut();
     return true;
   }
 
   if (isShortcutKey(input, 'q', { shift: true })) {
-    if (pasteLocked) {
-      cancelActivePasteOperation();
-    } else {
-      app.quit();
-    }
+    triggerQuitShortcut();
     return true;
   }
 
@@ -654,6 +667,41 @@ function attachWindowScopedShortcuts(browserWindow) {
     if (!handleWindowScopedShortcut(input)) return;
     event.preventDefault();
   });
+}
+
+// Global shortcuts are registered only while one of this instance's windows is
+// focused, so key events still reach us when focus sits inside a cross-origin
+// (out-of-process) iframe that before-input-event cannot observe. Registering
+// on focus and unregistering on blur keeps them scoped to the focused instance,
+// avoiding OS-level conflicts between multiple running instances.
+const GLOBAL_SHORTCUT_ACTIONS = [
+  { accelerators: ['CommandOrControl+Alt+H'], run: triggerNavShortcut },
+  { accelerators: ['CommandOrControl+Alt+V'], run: triggerPasteShortcut },
+  { accelerators: ['CommandOrControl+Alt+Shift+Q'], run: triggerQuitShortcut },
+];
+
+let globalShortcutsRegistered = false;
+
+function registerGlobalShortcuts() {
+  if (globalShortcutsRegistered) return;
+  globalShortcutsRegistered = true;
+
+  for (const { accelerators, run } of GLOBAL_SHORTCUT_ACTIONS) {
+    for (const accelerator of accelerators) {
+      try {
+        globalShortcut.register(accelerator, run);
+      } catch (_error) {
+        // Another instance/app may hold this accelerator; ignore and rely on
+        // before-input-event as a fallback while the main frame has focus.
+      }
+    }
+  }
+}
+
+function unregisterGlobalShortcuts() {
+  if (!globalShortcutsRegistered) return;
+  globalShortcutsRegistered = false;
+  globalShortcut.unregisterAll();
 }
 
 function eventOrigin(event) {
@@ -1269,8 +1317,23 @@ function createIframeDialog(iframePayload) {
   });
 }
 // ── Global shortcuts ─────────────────────────────────────────────────────────
-// Window-scoped shortcuts are handled with before-input-event so multiple
-// app instances can use the same key bindings without OS-level conflicts.
+// before-input-event handles shortcuts while the main frame has focus, but it
+// cannot see key events routed to a cross-origin (out-of-process) iframe such
+// as an expanded remote terminal. globalShortcut fills that gap; it is only
+// registered while one of this instance's windows is focused so multiple
+// instances don't fight over the same OS-level bindings.
+app.on('browser-window-focus', () => {
+  registerGlobalShortcuts();
+});
+
+app.on('browser-window-blur', () => {
+  // Defer so a focus event from switching between our own windows can settle
+  // first; only drop the shortcuts once no instance window holds focus.
+  setTimeout(() => {
+    if (BrowserWindow.getFocusedWindow()) return;
+    unregisterGlobalShortcuts();
+  }, 50);
+});
 
 // ── IPC handlers ─────────────────────────────────────────────────────────────
 
@@ -1639,6 +1702,7 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', async () => {
+  unregisterGlobalShortcuts();
   // Flush the kiosk session's cookie store so login state survives restarts.
   // Electron/Chromium buffers cookie writes; without this they can be lost on exit.
   for (const ses of kioskSessions.values()) {

@@ -103,10 +103,19 @@ test('iframe navigation expands Lion connect URLs without reusing token', () => 
 test('main process keeps shortcuts window-scoped for multi-instance use', () => {
   const main = readProjectFile('main.js');
 
-  assert.doesNotMatch(main, /globalShortcut/);
   assert.match(main, /require\('\.\/window-shortcuts'\)/);
   assert.match(main, /handleWindowScopedShortcut/);
   assert.match(main, /before-input-event/);
+});
+
+test('global shortcuts stay focus-guarded so cross-origin iframes still trigger them', () => {
+  const main = readProjectFile('main.js');
+
+  assert.match(main, /globalShortcut/);
+  assert.match(main, /registerGlobalShortcuts/);
+  assert.match(main, /unregisterGlobalShortcuts/);
+  assert.match(main, /browser-window-focus/);
+  assert.match(main, /browser-window-blur/);
 });
 
 test('main process uses native macOS fullscreen and work-area windowing', () => {
