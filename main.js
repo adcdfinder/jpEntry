@@ -124,6 +124,30 @@ let activeResolutionDisplayBounds = null;
 let mainWindowUsesMacSimpleFullscreen = false;
 const resolutionHookedPartitions = new Set();
 
+// ── CDP (Chrome DevTools Protocol) paste state ─────────────────────────────────
+let cdpPasteAttached = false;
+
+async function ensureCdpDebugger() {
+  if (cdpPasteAttached) return true;
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+
+  try {
+    await mainWindow.webContents.debugger.attach('1.3');
+    cdpPasteAttached = true;
+    mainWindow.webContents.debugger.on('detach', () => {
+      cdpPasteAttached = false;
+    });
+    return true;
+  } catch (_err) {
+    return false;
+  }
+}
+
+function sendCdpKeyEvent(keyEvent) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.debugger.sendCommand('Input.dispatchKeyEvent', keyEvent).catch(() => {});
+}
+
 const PASTE_DEFAULT_CHARS_PER_SECOND = 25;
 const PASTE_MIN_CHARS_PER_SECOND = 5;
 const PASTE_MAX_CHARS_PER_SECOND = 80;
@@ -873,20 +897,9 @@ function endPasteInputLock() {
   }
 }
 
-function sendSyntheticInputEvent(event) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-
-  pasteSendingSynthetic = true;
-  try {
-    mainWindow.webContents.sendInputEvent(event);
-  } finally {
-    pasteSendingSynthetic = false;
-  }
-}
-
 function primePasteTarget() {
-  sendSyntheticInputEvent({ type: 'keyDown', keyCode: 'Shift' });
-  sendSyntheticInputEvent({ type: 'keyUp', keyCode: 'Shift' });
+  sendCdpKeyEvent({ type: 'rawKeyDown', key: 'Shift', windowsVirtualKeyCode: 16, modifiers: 0 });
+  sendCdpKeyEvent({ type: 'keyUp', key: 'Shift', windowsVirtualKeyCode: 16, modifiers: 0 });
 }
 
 function cancelActivePasteOperation() {
@@ -1473,10 +1486,12 @@ ipcMain.on('resolution-action', (_event, payload) => {
   }
 });
 
-// Paste dialog: inject text into the focused element using paced sendInputEvent.
+// Paste dialog: inject text into the focused element using CDP (Chrome DevTools
+// Protocol) Input.dispatchKeyEvent, which routes through the real Chromium input
+// pipeline and reaches cross-origin iframes (OOPIF) such as the Guacamole client.
 // One visible character is sent per interval so fragile terminals can keep up.
 // \n → Return key, \t → Tab key, other chars via type:'char'.
-ipcMain.on('paste-apply', (_event, payload) => {
+ipcMain.on('paste-apply', async (_event, payload) => {
   const request = pasteRequestFromPayload(payload);
   const { text, charsPerSecond, charDelayMs, hurryMode } = request;
 
@@ -1486,6 +1501,8 @@ ipcMain.on('paste-apply', (_event, payload) => {
     }
     return;
   }
+
+  await ensureCdpDebugger();
 
   pasteAborted = false;
   activePasteOperation = { aborted: false };
@@ -1523,13 +1540,19 @@ ipcMain.on('paste-apply', (_event, payload) => {
 
     const sendCharacter = (char) => {
       if (char === '\n') {
-        sendSyntheticInputEvent({ type: 'keyDown', keyCode: 'Return' });
-        sendSyntheticInputEvent({ type: 'keyUp', keyCode: 'Return' });
+        sendCdpKeyEvent({ type: 'rawKeyDown', key: 'Enter', windowsVirtualKeyCode: 13, modifiers: 0 });
+        sendCdpKeyEvent({ type: 'keyUp', key: 'Enter', windowsVirtualKeyCode: 13, modifiers: 0 });
       } else if (char === '\t') {
-        // Send as char event to insert literal tab, not as a Tab key (which triggers indentation/navigation)
-        sendSyntheticInputEvent({ type: 'char', keyCode: '\t' });
+        sendCdpKeyEvent({ type: 'char', text: '\t', unmodifiedText: '\t', key: '\t', windowsVirtualKeyCode: 9, modifiers: 0 });
       } else if (char !== '\r') {
-        sendSyntheticInputEvent({ type: 'char', keyCode: char });
+        sendCdpKeyEvent({
+          type: 'char',
+          text: char,
+          unmodifiedText: char,
+          key: char,
+          windowsVirtualKeyCode: char.toUpperCase().charCodeAt(0),
+          modifiers: 0,
+        });
       }
     };
 
